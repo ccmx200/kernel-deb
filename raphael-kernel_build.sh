@@ -6,37 +6,29 @@ git clone https://github.com/GengWei1997/linux.git --branch raphael-$1 --depth 1
 cd linux
 
 # 下载内核配置文件
-wget -P arch/arm64/configs https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/raphael.config
+wget -O arch/arm64/configs/raphael.config https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/uboot-raphael.config
 
 # 生成内核配置
 make -j$(nproc) ARCH=arm64 LLVM=1 defconfig raphael.config
 
 # 编译内核
-make -j$(nproc) ARCH=arm64 LLVM=1
+make -j$(nproc) ARCH=arm64 LLVM=1 deb-pkg
 
-# 获取内核版本号
-_kernel_version="$(make kernelrelease -s)"
-
-# 准备 deb 包目录结构
-mkdir -p ../linux-xiaomi-raphael/boot/dtbs/qcom
-
-# 复制内核文件
-cp arch/arm64/boot/vmlinuz.efi ../linux-xiaomi-raphael/boot/vmlinuz-$_kernel_version
-cp arch/arm64/boot/dts/qcom/sm8150*.dtb ../linux-xiaomi-raphael/boot/dtbs/qcom
-cp .config ../linux-xiaomi-raphael/boot/config-$_kernel_version
-
-# 更新 deb 包控制文件中的版本号
-sed -i "s/Version:.*/Version: ${_kernel_version}/" ../linux-xiaomi-raphael/DEBIAN/control
-
-# 清理并安装内核模块
-rm -rf ../linux-xiaomi-raphael/lib
-make -j$(nproc) ARCH=arm64 LLVM=1 INSTALL_MOD_PATH=../linux-xiaomi-raphael modules_install
-rm ../linux-xiaomi-raphael/lib/modules/**/build
+# 复制生成的 dtb
+cp arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael.dtb ../
 
 cd ..
 
+# 重命名生成的 deb 包
+IMAGE_DEB=$(ls -1 linux-image-*.deb 2>/dev/null | grep -v '\-dbg_' | head -n1)
+HEADERS_DEB=$(ls -1 linux-headers-*.deb 2>/dev/null | head -n1)
+
+if [ -n "$IMAGE_DEB" ]; then
+  mv "$IMAGE_DEB" linux-image-xiaomi-raphael.deb
+fi
+if [ -n "$HEADERS_DEB" ]; then
+  mv "$HEADERS_DEB" linux-headers-xiaomi-raphael.deb
+fi
+
 # 清理源码目录
 rm -rf linux
-
-# 构建 deb 包
-dpkg-deb --build --root-owner-group linux-xiaomi-raphael

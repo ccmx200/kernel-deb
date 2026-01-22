@@ -9,10 +9,20 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "2. 下载linux-xiaomi内核包"
-wget https://ghfast.top/https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/linux-xiaomi-raphael.deb
+echo "2. 下载编译产物：image/headers/dtb"
+wget https://ghfast.top/https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/linux-image-xiaomi-raphael.deb
 if [ $? -ne 0 ]; then
-    echo "错误：内核包下载失败"
+    echo "错误：linux-image 下载失败"
+    exit 1
+fi
+wget https://ghfast.top/https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/linux-headers-xiaomi-raphael.deb
+if [ $? -ne 0 ]; then
+    echo "错误：linux-headers 下载失败"
+    exit 1
+fi
+wget https://ghfast.top/https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/sm8150-xiaomi-raphael.dtb
+if [ $? -ne 0 ]; then
+    echo "错误：dtb 下载失败"
     exit 1
 fi
 
@@ -21,20 +31,20 @@ dpkg --get-selections | grep linux
 
 echo "4. 查找并卸载所有linux-xiaomi内核包"
 echo "   正在查找linux-xiaomi相关包..."
-dpkg -l | grep -E "linux-xiaomi" | awk '{print $2}' | xargs dpkg -P
+dpkg -l | grep -E "linux-image|linux-headers|linux-xiaomi-raphael" | awk '{print $2}' | xargs -r dpkg -P
 
 echo "5. 清理/lib/modules目录（删除所有内核模块）"
 rm -rf /lib/modules/*
 
-echo "6. 安装新的linux-xiaomi内核包"
-if [ -f "linux-xiaomi-raphael.deb" ]; then
-    dpkg -i linux-xiaomi-raphael.deb
+echo "6. 安装新的 linux-image 与 linux-headers"
+if [ -f "linux-image-xiaomi-raphael.deb" ] && [ -f "linux-headers-xiaomi-raphael.deb" ]; then
+    dpkg -i linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb
     if [ $? -ne 0 ]; then
-        echo "错误：内核包安装失败"
+        echo "错误：安装 image/headers 失败"
         exit 1
     fi
 else
-    echo "错误：找不到linux-xiaomi-raphael.deb文件"
+    echo "错误：缺少 image/headers 安装文件"
     exit 1
 fi
 
@@ -70,7 +80,15 @@ else
     echo "   警告：未找到vmlinuz-*文件"
 fi
 
-echo "11. 显示/boot目录内容"
+echo "11. 覆盖设备树 dtb 到系统目录"
+mkdir -p /boot/dtbs/qcom
+cp -f sm8150-xiaomi-raphael.dtb /boot/dtbs/qcom/sm8150-xiaomi-raphael.dtb
+if [ $? -ne 0 ]; then
+    echo "错误：拷贝 dtb 失败"
+    exit 1
+fi
+
+echo "12. 显示/boot目录内容"
 ls -la /boot
 
 echo "=== 验证启动文件 ==="
@@ -89,7 +107,7 @@ else
     echo "请检查上述步骤是否有错误"
 fi
 
-echo "12. 清理下载的内核包"
-rm -f linux-xiaomi-raphael.deb
+echo "13. 清理下载的文件"
+rm -f linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb sm8150-xiaomi-raphael.dtb
 
 echo "=== 脚本执行完成 ==="

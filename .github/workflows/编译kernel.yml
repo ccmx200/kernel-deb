@@ -36,7 +36,7 @@ jobs:
           sudo apt update
           sudo apt install -y build-essential gcc-aarch64-linux-gnu bc flex bison \
           7zip kmod bash cpio binutils tar git wget dpkg libssl-dev clang llvm lld \
-          libelf-dev python3 rsync
+          libelf-dev python3 rsync debhelper-compat libdw-dev
       
       # 设置 ccache 缓存
       - name: 设置 ccache
@@ -66,14 +66,13 @@ jobs:
           export PATH="/usr/lib/ccache:$PATH"
           
           # 执行内核编译脚本
-          sudo sh raphael-kernel_build.sh ${{ inputs.kernel_version }}
+          sudo bash raphael-kernel_build.sh ${{ inputs.kernel_version }}
       
       # 获取准确的内核版本号
       - name: 获取准确内核版本号
         id: get-kernel-version
         run: |
-          # 从 control 文件中提取准确的内核版本号
-          KERNEL_VERSION=$(grep -oP 'Version:\s*\K.*' linux-xiaomi-raphael/DEBIAN/control)
+          KERNEL_VERSION=$(dpkg-deb -f linux-image-xiaomi-raphael.deb Version)
           echo "准确的内核版本号: $KERNEL_VERSION"
           echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
           
@@ -100,7 +99,9 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            *.deb
+            linux-image-xiaomi-raphael.deb
+            linux-headers-xiaomi-raphael.deb
+            sm8150-xiaomi-raphael.dtb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
@@ -110,4 +111,5 @@ jobs:
         with:
           name: kernel-packages-v${{ inputs.kernel_version }}
           path: |
-            linux-xiaomi-raphael.deb
+            *.deb
+            sm8150-xiaomi-raphael.dtb
