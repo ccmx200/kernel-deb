@@ -3,6 +3,10 @@ set -e  # 遇到错误立即退出
 
 # 克隆指定版本的内核源码
 git clone https://github.com/GengWei1997/linux.git --branch raphael-$1 --depth 1 linux
+
+# 应用 builddeb 补丁
+patch linux/scripts/package/builddeb < builddeb.patch
+
 cd linux
 
 # 下载内核配置文件
@@ -13,9 +17,6 @@ make -j$(nproc) ARCH=arm64 LLVM=1 defconfig raphael.config
 
 # 编译内核
 make -j$(nproc) ARCH=arm64 LLVM=1 deb-pkg
-
-# 复制生成的 dtb
-cp arch/arm64/boot/dts/qcom/sm8150-xiaomi-raphael.dtb ../
 
 cd ..
 

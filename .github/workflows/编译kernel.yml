@@ -72,7 +72,7 @@ jobs:
       - name: 获取准确内核版本号
         id: get-kernel-version
         run: |
-          KERNEL_VERSION=$(dpkg-deb -f linux-image-xiaomi-raphael.deb Version)
+          KERNEL_VERSION=$(dpkg-deb -f linux-image-xiaomi-raphael.deb Package | sed 's/linux-image-//')
           echo "准确的内核版本号: $KERNEL_VERSION"
           echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
           
@@ -101,7 +101,6 @@ jobs:
           files: |
             linux-image-xiaomi-raphael.deb
             linux-headers-xiaomi-raphael.deb
-            sm8150-xiaomi-raphael.dtb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
@@ -112,4 +111,3 @@ jobs:
           name: kernel-packages-v${{ inputs.kernel_version }}
           path: |
             *.deb
-            sm8150-xiaomi-raphael.dtb
