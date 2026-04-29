@@ -70,16 +70,8 @@ jobs:
           export PATH="/usr/lib/ccache:$PATH"
           
           # 执行内核编译脚本
-          sudo bash raphael-kernel_build.sh ${{ inputs.kernel_version }}
+          sudo sh raphael-kernel_build.sh ${{ inputs.kernel_version }}
       
-      # 获取准确的内核版本号
-      - name: 获取准确内核版本号
-        id: get-kernel-version
-        run: |
-          KERNEL_VERSION=$(dpkg-deb -f linux-image-xiaomi-raphael.deb Package | sed 's/linux-image-//')
-          echo "准确的内核版本号: $KERNEL_VERSION"
-          echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
-          
       # 获取当前时间戳
       - name: 获取构建时间
         id: get-timestamp
@@ -88,16 +80,17 @@ jobs:
       
       # 列出编译产物
       - name: 列出编译产物
-        run: ls -la *.deb
+        run: ls -la *.deb || true
       
       # 创建 GitHub Release 并上传编译产物
       - name: 创建 Release 并上传产物
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ inputs.kernel_version }}
-          name: "${{ steps.get-kernel-version.outputs.kernel_version }}"
+          tag_name: kernel-v${{ inputs.kernel_version }}
+          name: "xiaomi raphael linux内核 v${{ inputs.kernel_version }}"
           body: |
-            - 版本: ${{ steps.get-kernel-version.outputs.kernel_version }}
+            xiaomi raphael linux内核
+            - 版本: ${{ inputs.kernel_version }}
             - 构建时间: ${{ steps.get-timestamp.outputs.timestamp }}
             - 构建 ID: ${{ env.BUILD_TIMESTAMP }}
           draft: false
@@ -105,6 +98,8 @@ jobs:
           files: |
             linux-image-xiaomi-raphael.deb
             linux-headers-xiaomi-raphael.deb
+            firmware-xiaomi-raphael.deb
+            alsa-xiaomi-raphael.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       

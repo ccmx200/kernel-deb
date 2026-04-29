@@ -9,13 +9,13 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "2. 下载内核：image/headers"
-wget https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/linux-image-xiaomi-raphael.deb
+echo "2. 下载编译产物：image/headers"
+wget https://up-kernel.cuicanmx.cn/linux-image-xiaomi-raphael.deb
 if [ $? -ne 0 ]; then
     echo "错误：linux-image 下载失败"
     exit 1
 fi
-wget https://github.com/GengWei1997/kernel-deb/releases/download/v6.18/linux-headers-xiaomi-raphael.deb
+wget https://up-kernel.cuicanmx.cn/linux-headers-xiaomi-raphael.deb
 if [ $? -ne 0 ]; then
     echo "错误：linux-headers 下载失败"
     exit 1

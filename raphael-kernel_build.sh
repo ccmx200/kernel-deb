@@ -35,3 +35,7 @@ fi
 
 # 清理源码目录
 rm -rf linux
+
+# 构建 deb 包
+dpkg-deb --build --root-owner-group firmware-xiaomi-raphael
+dpkg-deb --build --root-owner-group alsa-xiaomi-raphael
