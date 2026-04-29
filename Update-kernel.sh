@@ -1,110 +1,77 @@
 #!/bin/bash
+set -e
+
+BASE_URL="https://up-kernel.cuicanmx.cn"
+FILES=(
+    "linux-image-xiaomi-raphael.deb"
+    "linux-headers-xiaomi-raphael.deb"
+    "firmware-xiaomi-raphael.deb"
+    "alsa-xiaomi-raphael.deb"
+)
+
+check_error() {
+    if [ $? -ne 0 ]; then
+        echo "错误：$1"
+        exit 1
+    fi
+}
+
+download_file() {
+    local file=$1
+    echo "   下载 $file..."
+    wget -q --show-progress "${BASE_URL}/${file}" -O "${file}"
+    check_error "$file 下载失败"
+}
 
 echo "=== 开始更新内核 ==="
 
-echo "1. 切换到/tmp工作目录"
-cd /tmp
-if [ $? -ne 0 ]; then
-    echo "错误：无法进入/tmp目录"
-    exit 1
-fi
+cd /tmp || exit 1
 
-echo "2. 下载编译产物：image/headers/firmware/alsa"
-wget https://up-kernel.cuicanmx.cn/linux-image-xiaomi-raphael.deb
-if [ $? -ne 0 ]; then
-    echo "错误：linux-image 下载失败"
-    exit 1
-fi
-wget https://up-kernel.cuicanmx.cn/linux-headers-xiaomi-raphael.deb
-if [ $? -ne 0 ]; then
-    echo "错误：linux-headers 下载失败"
-    exit 1
-fi
-wget https://up-kernel.cuicanmx.cn/firmware-xiaomi-raphael.deb
-if [ $? -ne 0 ]; then
-    echo "错误：firmware-xiaomi-raphael 下载失败"
-    exit 1
-fi
-wget https://up-kernel.cuicanmx.cn/alsa-xiaomi-raphael.deb
-if [ $? -ne 0 ]; then
-    echo "错误：alsa-xiaomi-raphael 下载失败"
-    exit 1
-fi
+echo "1. 下载内核包 (${#FILES[@]}个)"
+for file in "${FILES[@]}"; do
+    download_file "$file"
+done
 
-echo "3. 显示当前已安装的Linux相关软件包"
-dpkg --get-selections | grep linux
-
-echo "4. 查找并卸载所有linux-xiaomi内核包"
-echo "   正在查找linux-xiaomi相关包..."
-dpkg -l | grep -E "linux-headers|linux-image|linux-xiaomi-raphael" | awk '{print $2}' | xargs -r dpkg -P
-
-echo "5. 清理/lib/modules目录（删除所有内核模块）"
+echo "2. 卸载旧内核"
+dpkg -l 2>/dev/null | grep -E "linux-(headers|image)-xiaomi|linux-xiaomi-raphael" | awk '{print $2}' | xargs -r dpkg -P 2>/dev/null || true
 rm -rf /lib/modules/*
 
-echo "6. 安装新的 linux-image 与 linux-headers 及 firmware/alsa"
-if [ -f "linux-image-xiaomi-raphael.deb" ] && [ -f "linux-headers-xiaomi-raphael.deb" ] && [ -f "firmware-xiaomi-raphael.deb" ] && [ -f "alsa-xiaomi-raphael.deb" ]; then
-    dpkg -i linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb firmware-xiaomi-raphael.deb alsa-xiaomi-raphael.deb
-    if [ $? -ne 0 ]; then
-        echo "错误：安装 image/headers/firmware/alsa 失败"
-        exit 1
-    fi
-else
-    echo "错误：缺少安装文件"
-    exit 1
-fi
+echo "3. 安装新内核"
+dpkg -i "${FILES[@]}"
+check_error "内核安装失败"
 
-echo "7. 显示安装后的Linux相关软件包"
-dpkg --get-selections | grep linux
+echo "4. 生成 initramfs"
+update-initramfs -c -k all 2>/dev/null || echo "   警告：initramfs 更新可能存在问题"
 
-echo "8. 为所有内核生成initramfs镜像"
-update-initramfs -c -k all
-if [ $? -ne 0 ]; then
-    echo "警告：initramfs更新可能存在问题"
-fi
+echo "5. 配置启动文件"
+rm -f /boot/initramfs /boot/linux.efi
 
-echo "9. 清理旧的启动文件"
-rm -f /boot/initramfs
-rm -f /boot/linux.efi
-
-echo "10. 重命名启动文件"
-echo "   将最新的initrd.img移动到/boot/initramfs"
 latest_initrd=$(ls -t /boot/initrd.img-* 2>/dev/null | head -1)
 if [ -n "$latest_initrd" ]; then
     mv "$latest_initrd" /boot/initramfs
-    echo "   已移动: $latest_initrd -> /boot/initramfs"
+    echo "   initramfs: $(basename $latest_initrd)"
 else
-    echo "   警告：未找到initrd.img-*文件"
+    echo "   警告：未找到 initrd.img"
 fi
 
-echo "   将最新的vmlinuz移动到/boot/linux.efi"
 latest_vmlinuz=$(ls -t /boot/vmlinuz-* 2>/dev/null | head -1)
 if [ -n "$latest_vmlinuz" ]; then
     mv "$latest_vmlinuz" /boot/linux.efi
-    echo "   已移动: $latest_vmlinuz -> /boot/linux.efi"
+    echo "   linux.efi: $(basename $latest_vmlinuz)"
 else
-    echo "   警告：未找到vmlinuz-*文件"
+    echo "   警告：未找到 vmlinuz"
 fi
 
-echo "11. 显示/boot目录内容"
-ls -la /boot
-
-echo "=== 验证启动文件 ==="
+echo "6. 验证"
 if [ -f "/boot/initramfs" ] && [ -f "/boot/linux.efi" ]; then
-    echo "✓ 验证成功："
-    echo "  - /boot/initramfs 文件存在"
-    echo "  - /boot/linux.efi 文件存在"
-    echo ""
-    echo "文件详细信息："
-    ls -lh /boot/initramfs /boot/linux.efi
+    echo "   ✓ 启动文件就绪"
+    ls -lh /boot/initramfs /boot/linux.efi | awk '{print "     " $9 " (" $5 ")"}'
 else
-    echo "✗ 验证失败："
-    [ -f "/boot/initramfs" ] || echo "  - /boot/initramfs 文件缺失"
-    [ -f "/boot/linux.efi" ] || echo "  - /boot/linux.efi 文件缺失"
-    echo ""
-    echo "请检查上述步骤是否有错误"
+    echo "   ✗ 启动文件缺失"
+    exit 1
 fi
 
-echo "12. 清理下载的文件"
-rm -f linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb firmware-xiaomi-raphael.deb alsa-xiaomi-raphael.deb
+echo "7. 清理"
+rm -f "${FILES[@]}"
 
-echo "=== 脚本执行完成 ==="
+echo "=== 更新完成，执行 reboot 重启 ==="
