@@ -5,7 +5,6 @@
 ## 功能特性
 
 - 自动编译自定义 Linux 内核
-- 打包固件 (firmware) 和 ALSA 音频配置
 - 一键更新内核脚本
 - GitHub Actions 自动构建和发布
 
@@ -22,7 +21,7 @@
   - `linux-image-xiaomi-raphael.deb` - 内核镜像包
   - `linux-headers-xiaomi-raphael.deb` - 内核头文件包
   - `firmware-xiaomi-raphael.deb` - 设备固件包
-  - `alsa-xiaomi-raphael.deb` - ALSA 音频配置包
+  - `alsa-xiaomi-raphael.deb` 
 
 ### 手动触发构建
 
@@ -40,16 +39,8 @@
 
 **⚠️ 重要提示：请使用 root 账户执行脚本，避免权限错误！**
 
-#### 方式一：直接使用 GitHub 原始链接
-
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/ccmx200/kernel-deb/refs/heads/main/Update-kernel.sh)"
-```
-
-#### 方式二：使用 ghproxy 加速（国内推荐）
-
-```bash
-sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/ccmx200/kernel-deb/refs/heads/main/Update-kernel.sh)"
+sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"
 ```
 
 ### 脚本功能
@@ -130,10 +121,6 @@ kernel-deb/
 2. 确保设备电量充足（建议 50% 以上）
 3. 更新过程中请勿强制重启或断电
 4. 如遇到问题，可通过恢复模式恢复系统
-
-## 许可证
-
-本项目遵循 GPL 许可证。
 
 ## 致谢
 
