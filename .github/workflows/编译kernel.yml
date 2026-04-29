@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: '内核版本号 (如 6.18)'
+        description: '内核版本号 (如 7.0)'
         required: true
-        default: '6.18'
+        default: '7.0'
 
 # 工作流配置
 jobs:
@@ -42,35 +42,11 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 21
       
-      # 设置 ccache 缓存
-      - name: 设置 ccache
-        uses: actions/cache@v3
-        with:
-          path: ~/.ccache
-          key: ${{ runner.os }}-ccache-kernel-${{ inputs.kernel_version }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-kernel-
-      
-      # 安装并配置 ccache
-      - name: 安装配置 ccache
-        run: |
-          sudo apt install -y ccache
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=5G" >> $GITHUB_ENV
-          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
-      
       # 编译内核
       - name: 编译内核
-        env:
-          CCACHE_DIR: ${{ env.CCACHE_DIR }}
-          PATH: ${{ env.PATH }}
         run: |
-          # 导出 ccache 环境变量
-          export CCACHE_DIR="$HOME/.ccache"
-          export PATH="/usr/lib/ccache:$PATH"
-          
           # 执行内核编译脚本
-          sudo sh raphael-kernel_build.sh ${{ inputs.kernel_version }}
+          sudo bash raphael-kernel_build.sh ${{ inputs.kernel_version }}
       
       # 获取当前时间戳
       - name: 获取构建时间
