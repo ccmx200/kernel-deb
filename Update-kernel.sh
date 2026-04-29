@@ -9,7 +9,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "2. 下载编译产物：image/headers"
+echo "2. 下载编译产物：image/headers/firmware/alsa"
 wget https://up-kernel.cuicanmx.cn/linux-image-xiaomi-raphael.deb
 if [ $? -ne 0 ]; then
     echo "错误：linux-image 下载失败"
@@ -18,6 +18,16 @@ fi
 wget https://up-kernel.cuicanmx.cn/linux-headers-xiaomi-raphael.deb
 if [ $? -ne 0 ]; then
     echo "错误：linux-headers 下载失败"
+    exit 1
+fi
+wget https://up-kernel.cuicanmx.cn/firmware-xiaomi-raphael.deb
+if [ $? -ne 0 ]; then
+    echo "错误：firmware-xiaomi-raphael 下载失败"
+    exit 1
+fi
+wget https://up-kernel.cuicanmx.cn/alsa-xiaomi-raphael.deb
+if [ $? -ne 0 ]; then
+    echo "错误：alsa-xiaomi-raphael 下载失败"
     exit 1
 fi
 
@@ -31,15 +41,15 @@ dpkg -l | grep -E "linux-headers|linux-image|linux-xiaomi-raphael" | awk '{print
 echo "5. 清理/lib/modules目录（删除所有内核模块）"
 rm -rf /lib/modules/*
 
-echo "6. 安装新的 linux-image 与 linux-headers"
-if [ -f "linux-image-xiaomi-raphael.deb" ] && [ -f "linux-headers-xiaomi-raphael.deb" ]; then
-    dpkg -i linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb
+echo "6. 安装新的 linux-image 与 linux-headers 及 firmware/alsa"
+if [ -f "linux-image-xiaomi-raphael.deb" ] && [ -f "linux-headers-xiaomi-raphael.deb" ] && [ -f "firmware-xiaomi-raphael.deb" ] && [ -f "alsa-xiaomi-raphael.deb" ]; then
+    dpkg -i linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb firmware-xiaomi-raphael.deb alsa-xiaomi-raphael.deb
     if [ $? -ne 0 ]; then
-        echo "错误：安装 image/headers 失败"
+        echo "错误：安装 image/headers/firmware/alsa 失败"
         exit 1
     fi
 else
-    echo "错误：缺少 image/headers 安装文件"
+    echo "错误：缺少安装文件"
     exit 1
 fi
 
@@ -95,6 +105,6 @@ else
 fi
 
 echo "12. 清理下载的文件"
-rm -f linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb
+rm -f linux-image-xiaomi-raphael.deb linux-headers-xiaomi-raphael.deb firmware-xiaomi-raphael.deb alsa-xiaomi-raphael.deb
 
 echo "=== 脚本执行完成 ==="
