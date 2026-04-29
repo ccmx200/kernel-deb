@@ -17,8 +17,8 @@ const UPDATE_INTRO = `
 
 <div class="card">
 <h2>🚀 一键内核升级</h2>
-<div class="code-block">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
-<a class="download-btn" href="/Update-kernel.sh">📥 下载 Update-kernel.sh</a>
+<div class="code-block" id="cmd">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
+<button class="copy-btn" onclick="copyCmd()">📋 复制命令</button>
 </div>
 
 <div class="card">
@@ -130,24 +130,29 @@ function generateHtml(content) {
             background: #1f1a12;
         }
 
-        /* 下载按钮 */
-        .download-btn {
+        /* 复制按钮 */
+        .copy-btn {
             display: block;
             width: 100%;
             text-align: center;
             padding: 14px;
-            margin: 10px 0;
+            margin: 10px 0 0 0;
             background: #2563eb;
             color: #fff;
-            text-decoration: none;
+            border: none;
             border-radius: 8px;
             font-weight: 500;
+            font-size: 1rem;
+            cursor: pointer;
             transition: all 0.3s ease;
         }
 
-        .download-btn:hover {
+        .copy-btn:hover {
             background: #1d4ed8;
-            transform: scale(1.01);
+        }
+
+        .copy-btn.copied {
+            background: #10b981;
         }
 
         /* 代码块样式 */
@@ -175,6 +180,20 @@ function generateHtml(content) {
 <body>
     ${content}
     <footer>${CONFIG.footer}</footer>
+    <script>
+        function copyCmd() {
+            const cmd = document.getElementById('cmd').innerText;
+            navigator.clipboard.writeText(cmd).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✅ 已复制';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = '📋 复制命令';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+    </script>
 </body>
 </html>
   `;
@@ -196,17 +215,12 @@ async function handleRequest(request) {
     });
   }
 
-  // 根据文件类型选择源地址
-  let targetUrl;
-  if (path.endsWith('.deb')) {
-    // deb 包从 Release 下载
-    targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
-  } else if (path === '/Update-kernel.sh') {
-    // 脚本文件从主分支 raw 下载
-    targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/refs/heads/main/Update-kernel.sh`;
-  } else {
+  // 只代理 deb 包
+  if (!path.endsWith('.deb')) {
     return new Response('Not Found', { status: 404 });
   }
+
+  const targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
 
   const res = await fetch(targetUrl, {
     method: request.method,
