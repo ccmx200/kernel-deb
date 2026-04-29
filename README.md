@@ -5,10 +5,10 @@
 ```bash
 
 # 直接使用GitHub原始链接
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/Update-kernel.sh)"
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/ccmx200/kernel-deb/refs/heads/main/Update-kernel.sh)"
 
 # 使用ghproxy加速
-sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/GengWei1997/kernel-deb/refs/heads/main/ghproxy-Update-kernel.sh)"
+sudo bash -c "$(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/ccmx200/kernel-deb/refs/heads/main/ghproxy-Update-kernel.sh)"
 
 ```
 
