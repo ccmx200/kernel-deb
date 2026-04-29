@@ -1,20 +1,18 @@
-// 配置项 - 完全匹配刷机脚本
+// 配置项
 const CONFIG = {
-  // 真实 GitHub 仓库
   githubRepo: "ccmx200/kernel-deb",
-  // 固定版本 tag（你的脚本用的是 v6.18）
   releaseTag: "v7.0",
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
   footer: "GengWei 开源定制内核 | Cloudflare Worker 高速镜像加速"
 };
 
-// 内核更新介绍 + 优化排版文案
+// 内核更新介绍
 const UPDATE_INTRO = `
-<h1>小米 Raphael (K20 Pro) 定制 Linux 内核 v6.18</h1>
+<h1>小米 Raphael (K20 Pro) 定制 Linux 内核 v7.0</h1>
 
 <div class="card">
 <h2>📦 项目简介</h2>
-<p>本项目为 <strong>红米 K20 Pro / 小米 9T Pro (设备代号：raphael)</strong> 专属定制 Linux 内核编译项目，基于主线 Linux 6.18 内核适配移植，专为移动端 Linux 系统打磨优化，适配各类 Debian 系第三方系统。</p>
+<p>本项目为 <strong>红米 K20 Pro / 小米 9T Pro (设备代号：raphael)</strong> 专属定制 Linux 内核编译项目，基于主线 Linux 7.0 内核适配移植，专为移动端 Linux 系统打磨优化，适配各类 Debian 系第三方系统。</p>
 </div>
 
 <div class="card">
@@ -39,20 +37,23 @@ const UPDATE_INTRO = `
 </div>
 
 <div class="card">
-<h2>⬇️ 内核文件下载（高速镜像）</h2>
-<p>所有文件源自官方 Release，由 Cloudflare Worker 全球加速，解决 GitHub 下载超时、速度慢问题。</p>
-<a class="download-btn" href="/linux-image-xiaomi-raphael.deb" target="_blank">📥 内核镜像包 linux-image-xiaomi-raphael.deb</a>
-<a class="download-btn" href="/linux-headers-xiaomi-raphael.deb" target="_blank">📥 内核头文件 linux-headers-xiaomi-raphael.deb</a>
-<a class="download-btn" href="/firmware-xiaomi-raphael.deb" target="_blank">📥 固件包 firmware-xiaomi-raphael.deb</a>
-<a class="download-btn" href="/alsa-xiaomi-raphael.deb" target="_blank">📥 ALSA 包 alsa-xiaomi-raphael.deb</a>
-<a class="download-btn" href="/firmware-xiaomi-raphael.deb" target="_blank">📥 固件包 firmware-xiaomi-raphael.deb</a>
-<a class="download-btn" href="/alsa-xiaomi-raphael.deb" target="_blank">📥 ALSA 包 alsa-xiaomi-raphael.deb</a>
+<h2>🚀 一键内核升级</h2>
+<p>方式一：复制以下命令，在设备终端直接执行：</p>
+<div class="code-block">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
 </div>
 
 <div class="card">
-<h2>🚀 一键内核升级命令</h2>
-<p>复制以下命令，终端直接执行，全自动完成内核更新：</p>
-<div class="code-block">wget -O update-kernel.sh https://up-kernel.cuicanmx.cn/update-kernel.sh && chmod +x update-kernel.sh && ./update-kernel.sh</div>
+<h2>📋 脚本功能说明</h2>
+<p>执行一键升级脚本后，会自动完成以下操作：</p>
+<ol>
+<li>下载最新内核包（image、headers、firmware、alsa）</li>
+<li>卸载旧版本内核及相关软件包</li>
+<li>安装新版本内核（4 个 deb 包）</li>
+<li>生成 initramfs 镜像</li>
+<li>配置启动文件（/boot/initramfs、/boot/linux.efi）</li>
+<li>验证启动文件完整性</li>
+<li>清理临时下载文件</li>
+</ol>
 </div>
 
 <div class="card warning-card">
@@ -60,7 +61,8 @@ const UPDATE_INTRO = `
 <ul>
 <li>仅适配 <strong>小米 Raphael (K20 Pro)</strong> 设备，其他机型请勿刷入</li>
 <li>内核更新属于底层修改，刷机前请备份设备全部数据</li>
-<li>请确保设备电量充足，避免更新中断导致系统异常</li>
+<li>请确保设备电量充足（建议 50% 以上），避免更新中断导致系统异常</li>
+<li>更新完成后执行 <code>reboot</code> 重启设备即可使用新内核</li>
 </ul>
 </div>
 `;
@@ -110,13 +112,21 @@ function generateHtml(content) {
             margin: 0.6rem 0;
         }
 
-        ul {
+        ul, ol {
             padding-left: 1.5rem;
             color: #d1d5db;
         }
 
         li {
             margin: 0.5rem 0;
+        }
+
+        code {
+            background: #272c36;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #a5f3fc;
+            font-family: monospace;
         }
 
         /* 卡片通用样式 */
@@ -207,8 +217,17 @@ async function handleRequest(request) {
     });
   }
 
-  // 镜像代理 deb 内核文件
-  const targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
+  // 根据文件类型选择源地址
+  let targetUrl;
+  if (path.endsWith('.deb')) {
+    // deb 包从 Release 下载
+    targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
+  } else if (path === '/Update-kernel.sh') {
+    // 脚本文件从主分支 raw 下载
+    targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/refs/heads/main/Update-kernel.sh`;
+  } else {
+    return new Response('Not Found', { status: 404 });
+  }
 
   const res = await fetch(targetUrl, {
     method: request.method,
