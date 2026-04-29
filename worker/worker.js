@@ -1,9 +1,9 @@
 // 配置项 - 完全匹配刷机脚本
 const CONFIG = {
   // 真实 GitHub 仓库
-  githubRepo: "GengWei1997/kernel-deb",
+  githubRepo: "ccmx200/kernel-deb",
   // 固定版本 tag（你的脚本用的是 v6.18）
-  releaseTag: "v6.18",
+  releaseTag: "v7.0",
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
   footer: "GengWei 开源定制内核 | Cloudflare Worker 高速镜像加速"
 };
@@ -20,7 +20,7 @@ const UPDATE_INTRO = `
 <div class="card">
 <h2>✨ 内核更新特性</h2>
 <ul>
-<li>基于 <strong>Linux 6.18 主线内核</strong> 编译，修复大量上游底层漏洞</li>
+<li>基于 <strong>Linux 7.0 主线内核</strong> 编译</li>
 <li>完整适配设备触控、快充、陀螺仪、传感器等全套硬件驱动</li>
 <li>深度优化电源管理策略，大幅降低待机功耗、缓解设备发热</li>
 <li>修复原生内核死机、随机重启、系统卡顿等稳定性问题</li>
@@ -43,12 +43,16 @@ const UPDATE_INTRO = `
 <p>所有文件源自官方 Release，由 Cloudflare Worker 全球加速，解决 GitHub 下载超时、速度慢问题。</p>
 <a class="download-btn" href="/linux-image-xiaomi-raphael.deb" target="_blank">📥 内核镜像包 linux-image-xiaomi-raphael.deb</a>
 <a class="download-btn" href="/linux-headers-xiaomi-raphael.deb" target="_blank">📥 内核头文件 linux-headers-xiaomi-raphael.deb</a>
+<a class="download-btn" href="/firmware-xiaomi-raphael.deb" target="_blank">📥 固件包 firmware-xiaomi-raphael.deb</a>
+<a class="download-btn" href="/alsa-xiaomi-raphael.deb" target="_blank">📥 ALSA 包 alsa-xiaomi-raphael.deb</a>
+<a class="download-btn" href="/firmware-xiaomi-raphael.deb" target="_blank">📥 固件包 firmware-xiaomi-raphael.deb</a>
+<a class="download-btn" href="/alsa-xiaomi-raphael.deb" target="_blank">📥 ALSA 包 alsa-xiaomi-raphael.deb</a>
 </div>
 
 <div class="card">
 <h2>🚀 一键内核升级命令</h2>
 <p>复制以下命令，终端直接执行，全自动完成内核更新：</p>
-<div class="code-block">wget -O update-kernel.sh https://你的worker域名/update-kernel.sh && chmod +x update-kernel.sh && ./update-kernel.sh</div>
+<div class="code-block">wget -O update-kernel.sh https://up-kernel.cuicanmx.cn/update-kernel.sh && chmod +x update-kernel.sh && ./update-kernel.sh</div>
 </div>
 
 <div class="card warning-card">
