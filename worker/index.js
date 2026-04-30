@@ -356,7 +356,7 @@ async function handleRequest(request) {
   let targetUrl;
   if (path.endsWith('.deb')) {
     // deb 包从 Release 下载
-    targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
+    targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/kernel-${CONFIG.releaseTag}${path}`;
   } else if (path === '/Update-kernel.sh') {
     // 脚本从主分支 raw 下载
     targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/refs/heads/main/Update-kernel.sh`;
