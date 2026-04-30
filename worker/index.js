@@ -3,16 +3,111 @@ const CONFIG = {
   githubRepo: "ccmx200/kernel-deb",
   releaseTag: "v7.0",
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
-  footer: "GengWei 开源定制内核 "
+  footer: "GengWei 开源定制内核 | Cloudflare Worker 高速镜像加速"
 };
 
-// 内核更新介绍
-const UPDATE_INTRO = `
-<h1>小米 Raphael (K20 Pro) Linux 内核 v7.0</h1>
+// 获取 Release 信息
+async function fetchReleaseInfo() {
+  try {
+    const apiUrl = `https://api.github.com/repos/${CONFIG.githubRepo}/releases/tags/kernel-${CONFIG.releaseTag}`;
+    const response = await fetch(apiUrl, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'Cloudflare-Worker'
+      }
+    });
+    
+    if (!response.ok) {
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // 解析 body 中的构建时间和构建 ID
+    const body = data.body || '';
+    const buildTimeMatch = body.match(/构建时间:\s*(.+)/);
+    const buildIdMatch = body.match(/构建 ID:\s*(.+)/);
+    
+    return {
+      version: CONFIG.releaseTag,
+      buildTime: buildTimeMatch ? buildTimeMatch[1].trim() : null,
+      buildId: buildIdMatch ? buildIdMatch[1].trim() : null,
+      publishedAt: data.published_at,
+      assets: data.assets || []
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// 格式化日期
+function formatDate(dateStr) {
+  if (!dateStr) return '未知';
+  const date = new Date(dateStr);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+// 计算相对时间
+function getRelativeTime(dateStr) {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diff = now - date;
+  
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) return `${days} 天前`;
+  if (hours > 0) return `${hours} 小时前`;
+  return '刚刚';
+}
+
+// 生成页面内容
+async function generateContent() {
+  const releaseInfo = await fetchReleaseInfo();
+  
+  let buildInfoHtml = '';
+  if (releaseInfo) {
+    const relativeTime = getRelativeTime(releaseInfo.publishedAt);
+    buildInfoHtml = `
+<div class="card build-info-card">
+<h2>📊 最新构建信息</h2>
+<div class="build-info-grid">
+  <div class="build-info-item">
+    <span class="build-info-label">内核版本</span>
+    <span class="build-info-value">${releaseInfo.version}</span>
+  </div>
+  <div class="build-info-item">
+    <span class="build-info-label">构建时间</span>
+    <span class="build-info-value">${releaseInfo.buildTime || formatDate(releaseInfo.publishedAt)}</span>
+  </div>
+  <div class="build-info-item">
+    <span class="build-info-label">发布时间</span>
+    <span class="build-info-value">${relativeTime}</span>
+  </div>
+  <div class="build-info-item">
+    <span class="build-info-label">构建 ID</span>
+    <span class="build-info-value">${releaseInfo.buildId || '-'}</span>
+  </div>
+</div>
+</div>
+`;
+  }
+
+  return `
+<h1>小米 Raphael (K20 Pro) Linux 内核 ${CONFIG.releaseTag}</h1>
+
+${buildInfoHtml}
 
 <div class="card">
 <h2>📦 项目简介</h2>
-<p>本项目为 <strong>红米 K20 Pro (设备代号：raphael)</strong></p>
+<p>本项目为 <strong>红米 K20 Pro(设备代号：raphael)</p>
 </div>
 
 <div class="card">
@@ -45,6 +140,7 @@ const UPDATE_INTRO = `
 </ul>
 </div>
 `;
+}
 
 // 生成美化HTML页面
 function generateHtml(content) {
@@ -124,6 +220,40 @@ function generateHtml(content) {
             transform: translateY(-2px);
         }
 
+        /* 构建信息卡片 */
+        .build-info-card {
+            border-color: #10b981;
+            background: linear-gradient(135deg, #161a23 0%, #0d2922 100%);
+        }
+
+        .build-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .build-info-item {
+            display: flex;
+            flex-direction: column;
+            padding: 0.8rem;
+            background: rgba(16, 185, 129, 0.1);
+            border-radius: 8px;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .build-info-label {
+            font-size: 0.85rem;
+            color: #6b7280;
+            margin-bottom: 0.3rem;
+        }
+
+        .build-info-value {
+            font-size: 1.1rem;
+            color: #10b981;
+            font-weight: 600;
+        }
+
         /* 警告卡片 */
         .warning-card {
             border-color: #d97706;
@@ -175,6 +305,12 @@ function generateHtml(content) {
             color: #6b7280;
             font-size: 0.9rem;
         }
+
+        @media (max-width: 600px) {
+            .build-info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
@@ -210,7 +346,8 @@ async function handleRequest(request) {
 
   // 根路径：展示美化首页
   if (path === "/") {
-    return new Response(generateHtml(UPDATE_INTRO), {
+    const content = await generateContent();
+    return new Response(generateHtml(content), {
       headers: { "Content-Type": "text/html; charset=utf-8" }
     });
   }
