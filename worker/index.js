@@ -128,8 +128,8 @@ async function generateContent() {
   ${buildInfoHtml}
 
   <div class="card">
-    <h2>📦 项目简介</h2>
-    <p>本项目为 <strong>红米 K20 Pro（设备代号：raphael）</strong> 提供定制 Linux 内核镜像，通过 GitHub Actions 自动构建，经 Cloudflare Worker 加速分发。</p>
+    <h2>📦 更新 API</h2>
+    <p>这是一个自动化内核更新接口，依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供高速镜像加速。配合一键脚本，即可自动获取并安装由 GitHub Actions 构建的最新 Linux 内核包。</p>
   </div>
 
   <div class="card">
