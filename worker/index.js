@@ -5,7 +5,7 @@ const CONFIG = {
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
   githubRepoUrl: "https://github.com/ccmx200/kernel-deb",
   // 缓存时间（秒）
-  releaseCacheTTL: 600,
+  releaseCacheTTL: 86400,
   githubToken: "", // 建议在环境变量中设置 GITHUB_TOKEN
 };
 
@@ -129,7 +129,7 @@ async function generateContent() {
 
   <div class="card">
     <h2>📦 更新 API</h2>
-    <p>这是一个自动化内核更新接口，依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供高速镜像加速。配合一键脚本，即可自动获取并安装由 GitHub Actions 构建的最新 Linux 内核包。</p>
+    <p>这是一个自动化内核更新接口，依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供高速更新服务。配合一键脚本，即可自动获取并安装由 GitHub Actions 构建的最新 Linux 内核包。</p>
   </div>
 
   <div class="card">
