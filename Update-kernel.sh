@@ -100,46 +100,47 @@ echo "4. 备份当前启动文件"
 [ -f /boot/initramfs ] && cp /boot/initramfs /boot/initramfs.bak.$(date +%s) && echo "   已备份 initramfs"
 [ -f /boot/linux.efi ] && cp /boot/linux.efi /boot/linux.efi.bak.$(date +%s) && echo "   已备份 linux.efi"
 
-# ---------- 卸载旧内核（关键改进）----------
-echo "5. 彻底卸载所有旧 sm8150 内核包"
-# 列出所有已安装且名称包含 sm8150 的内核包（image/headers），以及 raphael 相关固件/alsa
+# ---------- 5. 彻底卸载旧内核 ----------
+echo "5. 卸载所有旧 sm8150 内核及相关包"
 OLD_PKGS=$(dpkg -l 2>/dev/null | grep -E 'linux-(image|headers)-.*sm8150|firmware-xiaomi-raphael|alsa-xiaomi-raphael' | awk '{print $2}' | tr '\n' ' ')
 if [ -n "$OLD_PKGS" ]; then
-    echo "   发现旧包：$OLD_PKGS"
-    # 先尝试正常 purge，冲突时强制覆盖
-    dpkg --purge $OLD_PKGS 2>/dev/null || {
-        echo "   正常卸载失败，尝试强制删除..."
-        dpkg --purge --force-all $OLD_PKGS 2>/dev/null || true
-    }
-    # 再次确认是否残留
+    echo "   旧包列表：$OLD_PKGS"
+    # 强制删除所有匹配包，忽略依赖
+    dpkg --purge --force-all $OLD_PKGS 2>/dev/null || true
+    # 二次清理残留
     REMAIN=$(dpkg -l 2>/dev/null | grep -E 'linux-(image|headers)-.*sm8150' | awk '{print $2}')
-    if [ -n "$REMAIN" ]; then
-        echo "   残留包：$REMAIN，手动清理..."
-        for pkg in $REMAIN; do
-            dpkg --force-all -P "$pkg" 2>/dev/null || true
-        done
-    fi
+    for pkg in $REMAIN; do
+        dpkg --force-all -P "$pkg" 2>/dev/null || true
+    done
 else
-    echo "   未发现旧内核包"
+    echo "   未发现旧相关包"
 fi
 
-# ---------- 安装依赖 ----------
-echo "6. 解决依赖问题"
-apt-get update -qq
-apt-get install -y -qq alsa-ucm-conf || echo "   alsa-ucm-conf 安装失败，将跳过"
+# ---------- 关键步骤：清理全部旧模块（必须）----------
+echo "   清理 /lib/modules 全部内容"
+rm -rf /lib/modules/*
 
-# ---------- 安装新内核 ----------
-echo "7. 安装新内核"
+# ---------- 6. 提前安装依赖（避免安装中断）----------
+echo "6. 安装必要依赖"
+apt-get update -qq
+apt-get install -y -qq alsa-ucm-conf || echo "   alsa-ucm-conf 安装失败，将继续（可能影响音频）"
+
+# ---------- 7. 安装新内核（确保完整）----------
+echo "7. 安装新内核（共 ${#FILES[@]} 个包）"
 dpkg -i "${FILES[@]}" || {
-    echo "   安装出现错误，尝试修复依赖..."
+    echo "   第一次安装失败，尝试修复依赖..."
     apt-get install -f -y || {
-        echo "   修复失败，恢复备份并退出"
-        [ -f /boot/initramfs.bak.* ] && mv /boot/initramfs.bak.* /boot/initramfs
-        [ -f /boot/linux.efi.bak.* ] && mv /boot/linux.efi.bak.* /boot/linux.efi
-        exit 1
+        echo "   修复失败，尝试强制安装..."
+        dpkg -i --force-all "${FILES[@]}" || {
+            echo "   强制安装仍失败，恢复备份并退出"
+            [ -n "$backup_initramfs" ] && mv "$backup_initramfs" /boot/initramfs
+            [ -n "$backup_linuxefi" ] && mv "$backup_linuxefi" /boot/linux.efi
+            exit 1
+        }
     }
 }
 
+echo "   内核包安装完成，模块已释放"
 # ---------- 获取新内核版本 ----------
 echo "8. 检测新内核版本"
 NEW_VER=$(ls -1 /lib/modules/ 2>/dev/null | tail -1)
