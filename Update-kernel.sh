@@ -38,7 +38,7 @@ download_with_aria2() {
     local file=$1 url="${BASE_URL}/${file}" retry=0
     while [ $retry -lt $MAX_RETRIES ]; do
         echo "   [$(($retry+1))/$MAX_RETRIES] 下载 $file..."
-        if aria2c -x $CONNECTIONS -s $CONNECTIONS -k 1M \
+        if aria2c -x $CONNECTIONS -s $CONNECTIONS -k 4M \
             --max-tries=2 --timeout=60 --retry-wait=5 \
             --console-log-level=error --summary-interval=0 \
             -o "$file" "$url" >/dev/null 2>&1; then
