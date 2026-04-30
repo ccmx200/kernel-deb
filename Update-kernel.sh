@@ -9,7 +9,7 @@ FILES=(
     "alsa-xiaomi-raphael.deb"
 )
 MAX_RETRIES=3
-CONNECTIONS=4          # 每个文件并行连接数（保留4，避免二次429）
+CONNECTIONS=32        # 每个文件并行连接数（保留16，避免二次429）
 WORK_DIR="/tmp"
 
 echo "=== 开始更新内核 ==="
