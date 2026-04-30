@@ -215,12 +215,17 @@ async function handleRequest(request) {
     });
   }
 
-  // 只代理 deb 包
-  if (!path.endsWith('.deb')) {
+  // 根据路径选择源
+  let targetUrl;
+  if (path.endsWith('.deb')) {
+    // deb 包从 Release 下载
+    targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
+  } else if (path === '/Update-kernel.sh') {
+    // 脚本从主分支 raw 下载
+    targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/refs/heads/main/Update-kernel.sh`;
+  } else {
     return new Response('Not Found', { status: 404 });
   }
-
-  const targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/${CONFIG.releaseTag}${path}`;
 
   const res = await fetch(targetUrl, {
     method: request.method,
