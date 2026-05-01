@@ -7,13 +7,10 @@ const CONFIG = {
   releaseCacheTTL: 86400,            // Release 信息缓存 1 天
   assetCacheTTL: 604800,             // .deb 缓存 7 天
   scriptCacheTTL: 300,               // 脚本缓存 5 分钟
-  githubToken: "",                   // 不使用 Token
   cronMaxRetries: 3,                 // 定时任务重试次数
 };
 
 // ========== 缓存工具 ==========
-function getCacheKey(url) { return new URL(url).pathname; }
-
 async function getCached(request, ttl) {
   const cache = caches.default;
   const cached = await cache.match(request);
@@ -34,9 +31,12 @@ async function setCache(request, response, ttl) {
     statusText: response.statusText,
     headers,
   });
-  ctx?.waitUntil?.(cache.put(request, res));
-  // 定时事件中 ctx 可能不存在，直接 await
-  if (!ctx) await cache.put(request, res);
+  // 在 scheduled 事件中 ctx 可能未定义，安全处理
+  if (typeof ctx !== "undefined" && ctx?.waitUntil) {
+    ctx.waitUntil(cache.put(request, res));
+  } else {
+    await cache.put(request, res);
+  }
 }
 
 // ========== 获取 Release 信息（带缓存）==========
@@ -78,7 +78,9 @@ function parseReleaseData(data) {
   };
 }
 
-function formatDate(d) { return d ? new Date(d).toLocaleString("zh-CN", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }) : "未知"; }
+function formatDate(d) {
+  return d ? new Date(d).toLocaleString("zh-CN", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }) : "未知";
+}
 
 function getRelativeTime(d) {
   if (!d) return "";
@@ -89,7 +91,7 @@ function getRelativeTime(d) {
   return "刚刚";
 }
 
-// ========== 生成页面内容（布局优化）==========
+// ========== 生成页面内容（一键升级提前）==========
 async function generateContent() {
   const info = await fetchReleaseInfo();
 
@@ -242,7 +244,7 @@ async function handleRequest(event) {
   return new Response("Not Found", { status: 404 });
 }
 
-// ==================== 代理下载 + 缓存 ====================
+// ==================== 代理下载 + 缓存（修复流读取） ====================
 async function proxyDownload(request, path) {
   const isScript = path === "/Update-kernel.sh";
   const isDeb = path.endsWith(".deb");
@@ -257,7 +259,7 @@ async function proxyDownload(request, path) {
   const cacheKey = new Request(targetUrl, { method: "GET" });
   const ttl = isDeb ? CONFIG.assetCacheTTL : CONFIG.scriptCacheTTL;
 
-  // 1. 检查缓存（deb 几乎必定命中，因为定时任务已预热）
+  // 1. 先检查缓存
   const cached = await getCached(cacheKey, ttl);
   if (cached) {
     const respHeaders = new Headers(cached.headers);
@@ -270,7 +272,7 @@ async function proxyDownload(request, path) {
     });
   }
 
-  // 2. 缓存未命中，向源站请求（正常情况永远不会走到这里）
+  // 2. 缓存未命中，请求源站
   const clientHeaders = new Headers(request.headers);
   const proxyHeaders = new Headers();
   let hasUA = false;
@@ -283,22 +285,50 @@ async function proxyDownload(request, path) {
   if (!hasUA) proxyHeaders.set("User-Agent", "Mozilla/5.0");
 
   try {
-    const resp = await fetch(targetUrl, { headers: proxyHeaders, redirect: "follow" });
-    const resHeaders = new Headers(resp.headers);
-    resHeaders.set("Access-Control-Allow-Origin", "*");
-    resHeaders.set("Accept-Ranges", "bytes");
-    if (isDeb) {
-      resHeaders.set("Content-Disposition", "attachment");
+    const resp = await fetch(targetUrl, {
+      headers: proxyHeaders,
+      redirect: "follow",
+    });
+
+    // 克隆一份专门用于缓存，避免 body 被读取两次
+    const clonedForCache = resp.clone();
+
+    // 构建缓存响应头
+    const cacheHeaders = new Headers(clonedForCache.headers);
+    cacheHeaders.set("X-Cache-Age", Date.now().toString());
+    cacheHeaders.set("Cache-Control", `public, max-age=${ttl}`);
+    if (isDeb) cacheHeaders.set("Content-Disposition", "attachment");
+
+    const cacheRes = new Response(clonedForCache.body, {
+      status: clonedForCache.status,
+      statusText: clonedForCache.statusText,
+      headers: cacheHeaders,
+    });
+
+    // 异步写入缓存（不等待）
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(caches.default.put(cacheKey, cacheRes));
+    } else {
+      // 在定时任务中可能没有 ctx，直接 await
+      await caches.default.put(cacheKey, cacheRes);
     }
-    // 放入缓存
-    await setCache(cacheKey, new Response(resp.body, {
+
+    // 返回原始响应给客户端（也添加必要头）
+    const clientHeadersResp = new Headers(resp.headers);
+    clientHeadersResp.set("Access-Control-Allow-Origin", "*");
+    clientHeadersResp.set("Accept-Ranges", "bytes");
+    if (isDeb) clientHeadersResp.set("Content-Disposition", "attachment");
+
+    return new Response(resp.body, {
       status: resp.status,
       statusText: resp.statusText,
-      headers: resHeaders,
-    }), ttl);
-    return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: resHeaders });
+      headers: clientHeadersResp,
+    });
   } catch (err) {
-    return new Response(`Proxy error: ${err.message}`, { status: 502, headers: { "Access-Control-Allow-Origin": "*" } });
+    return new Response(`Proxy error: ${err.message}`, {
+      status: 502,
+      headers: { "Access-Control-Allow-Origin": "*" },
+    });
   }
 }
 
@@ -325,25 +355,36 @@ async function warmUpCache() {
     let success = false;
     for (let retry = 0; retry < CONFIG.cronMaxRetries; retry++) {
       try {
-        // 使用简单的 fetch，不添加 Authorization
         const resp = await fetch(downloadUrl, {
           headers: { "User-Agent": "Cloudflare-Worker-Cron" },
           redirect: "follow",
         });
-        if (resp.ok) {
-          await setCache(cacheReq, resp, CONFIG.assetCacheTTL);
-          console.log(`✅ ${asset.name} 缓存成功`);
-          success = true;
-          break;
-        } else {
+        if (!resp.ok) {
           console.log(`⚠️ ${asset.name} 返回 ${resp.status}，重试 ${retry+1}/${CONFIG.cronMaxRetries}`);
+          continue;
         }
+        // 克隆响应，一份缓存，一份可能还要消费（但我们直接缓存即可）
+        const cloned = resp.clone();
+        const cacheHeaders = new Headers(cloned.headers);
+        cacheHeaders.set("X-Cache-Age", Date.now().toString());
+        cacheHeaders.set("Cache-Control", `public, max-age=${CONFIG.assetCacheTTL}`);
+        cacheHeaders.set("Content-Disposition", "attachment");
+
+        const cacheRes = new Response(cloned.body, {
+          status: cloned.status,
+          statusText: cloned.statusText,
+          headers: cacheHeaders,
+        });
+        await caches.default.put(cacheReq, cacheRes);
+        console.log(`✅ ${asset.name} 缓存成功`);
+        success = true;
+        break;
       } catch (e) {
         console.log(`❌ ${asset.name} 请求失败: ${e.message}，重试 ${retry+1}/${CONFIG.cronMaxRetries}`);
       }
     }
     if (!success) {
-      console.log(`💥 ${asset.name} 最终缓存失败，请检查网络或 GitHub 限制`);
+      console.log(`💥 ${asset.name} 最终缓存失败`);
     }
   }
 
