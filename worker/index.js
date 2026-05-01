@@ -4,16 +4,17 @@ const CONFIG = {
   releaseTag: "v7.0",
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
   githubRepoUrl: "https://github.com/ccmx200/kernel-deb",
-  releaseCacheTTL: 86400, // 缓存时间（秒）
-  githubToken: "", // 如需访问私有仓库，请在 Cloudflare 环境变量中设置 GITHUB_TOKEN
+  releaseCacheTTL: 86400,            // 发行版信息缓存 1 天
+  assetCacheTTL: 604800,             // deb 文件缓存 7 天
+  githubToken: "",                   // 从环境变量读取
 };
 
-// 从环境变量读取令牌（可选）
+// 从环境变量注入 Token
 if (typeof GITHUB_TOKEN !== "undefined") {
   CONFIG.githubToken = GITHUB_TOKEN;
 }
 
-// ---------- 工具函数 ----------
+// ========== 缓存工具函数 ==========
 function getCacheKey(url) { return new URL(url).pathname; }
 
 async function getCachedResponse(request) {
@@ -26,10 +27,12 @@ async function getCachedResponse(request) {
   return null;
 }
 
-async function setCachedResponse(request, response) {
+async function setCachedResponse(request, response, ttl = CONFIG.releaseCacheTTL) {
   const cache = caches.default;
   const headers = new Headers(response.headers);
   headers.set("X-Cache-Age", Date.now().toString());
+  // 设置浏览器及边缘缓存时间
+  headers.set("Cache-Control", `public, max-age=${ttl}`);
   const res = new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -38,10 +41,12 @@ async function setCachedResponse(request, response) {
   ctx.waitUntil(cache.put(request, res));
 }
 
-// ---------- 获取 Release 信息（带缓存）----------
+// ========== 获取 Release 信息（带缓存）==========
 async function fetchReleaseInfo() {
   const apiUrl = `https://api.github.com/repos/${CONFIG.githubRepo}/releases/tags/kernel-${CONFIG.releaseTag}`;
-  const cacheRequest = new Request(apiUrl, { headers: { "Accept": "application/vnd.github.v3+json" } });
+  const cacheRequest = new Request(apiUrl, {
+    headers: { "Accept": "application/vnd.github.v3+json" },
+  });
 
   const cached = await getCachedResponse(cacheRequest);
   if (cached) {
@@ -49,12 +54,19 @@ async function fetchReleaseInfo() {
   }
 
   try {
-    const headers = { "Accept": "application/vnd.github.v3+json", "User-Agent": "Cloudflare-Worker" };
-    if (CONFIG.githubToken) headers["Authorization"] = `token ${CONFIG.githubToken}`;
+    const headers = {
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "Cloudflare-Worker",
+    };
+    if (CONFIG.githubToken) {
+      headers["Authorization"] = `token ${CONFIG.githubToken}`;
+    }
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) return null;
     const data = await response.json();
-    await setCachedResponse(cacheRequest, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } }));
+    await setCachedResponse(cacheRequest, new Response(JSON.stringify(data), {
+      headers: { "Content-Type": "application/json" },
+    }));
     return parseReleaseData(data);
   } catch (e) {
     console.error("Release fetch failed:", e);
@@ -77,7 +89,10 @@ function parseReleaseData(data) {
 
 function formatDate(dateStr) {
   if (!dateStr) return "未知";
-  return new Date(dateStr).toLocaleString("zh-CN", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+  return new Date(dateStr).toLocaleString("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
 }
 
 function getRelativeTime(dateStr) {
@@ -90,38 +105,38 @@ function getRelativeTime(dateStr) {
   return "刚刚";
 }
 
-// ---------- 生成页面内容（新设计）----------
+// ========== 生成页面内容（新布局）==========
 async function generateContent() {
   const releaseInfo = await fetchReleaseInfo();
 
   let buildHtml = "";
   if (releaseInfo) {
     buildHtml = `
-      <div class="stats">
-        <div class="stat">
-          <span class="stat-label">内核版本</span>
-          <span class="stat-value">${releaseInfo.version}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">构建时间</span>
-          <span class="stat-value">${releaseInfo.buildTime || formatDate(releaseInfo.publishedAt)}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">发布时间</span>
-          <span class="stat-value">${getRelativeTime(releaseInfo.publishedAt)}</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">构建 ID</span>
-          <span class="stat-value">${releaseInfo.buildId || "-"}</span>
-        </div>
-      </div>`;
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-label">内核版本</span>
+        <span class="stat-value">${releaseInfo.version}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">构建时间</span>
+        <span class="stat-value">${releaseInfo.buildTime || formatDate(releaseInfo.publishedAt)}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">发布时间</span>
+        <span class="stat-value">${getRelativeTime(releaseInfo.publishedAt)}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">构建 ID</span>
+        <span class="stat-value">${releaseInfo.buildId || "-"}</span>
+      </div>
+    </div>`;
   } else {
     buildHtml = `
-      <div class="stats" style="background:#fff3cd;border-color:#ffc107;">
-        <div class="stat" style="grid-column:1/-1;text-align:center;color:#856404;">
-          ⚠️ 暂时无法获取最新构建数据，请刷新重试
-        </div>
-      </div>`;
+    <div class="stats" style="background:#fff3cd;border-color:#ffc107;">
+      <div class="stat" style="grid-column:1/-1;text-align:center;color:#856404;">
+        ⚠️ 暂时无法获取最新构建数据，请刷新重试
+      </div>
+    </div>`;
   }
 
   return `
@@ -135,16 +150,17 @@ async function generateContent() {
       ${buildHtml}
     </section>
 
-    <section class="card">
-      <h2>📦 关于本项目</h2>
-      <p>依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供稳定的内核更新服务。所有内核包由 GitHub Actions 自动构建，通过本页面的命令即可快速安装。</p>
-      <p style="margin-top:0.5rem;font-size:0.9rem;color:#6b7280;">支持断点续传，全国加速访问。</p>
-    </section>
-
+    <!-- 🚀 一键升级提前 -->
     <section class="card">
       <h2>🚀 一键升级</h2>
       <div class="code-block" id="cmd">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
       <button class="copy-btn" onclick="copyCmd()">📋 复制命令</button>
+    </section>
+
+    <section class="card">
+      <h2>📦 关于本项目</h2>
+      <p>依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供稳定的内核更新服务。所有内核包由 GitHub Actions 自动构建，通过本页面的命令即可快速安装。</p>
+      <p style="margin-top:0.5rem;font-size:0.9rem;color:#6b7280;">支持断点续传，全国加速访问。</p>
     </section>
 
     <section class="card">
@@ -170,7 +186,7 @@ async function generateContent() {
     </section>`;
 }
 
-// ---------- 生成完整 HTML（新设计）----------
+// ========== 生成完整 HTML ==========
 function generateHtml(content) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -180,219 +196,36 @@ function generateHtml(content) {
   <title>${CONFIG.pageTitle}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐧</text></svg>">
   <style>
-    /* ========== 全局重置与字体 ========== */
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    body{
-      background:#f8fafc;
-      color:#1e293b;
-      font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
-      line-height:1.6;
-      min-height:100vh;
-      padding-bottom:3rem;
-    }
-    a{color:#2563eb;text-decoration:none}
-    a:hover{text-decoration:underline}
-
-    /* 容器 */
-    .container{
-      max-width:900px;
-      margin:0 auto;
-      padding:2rem 1.5rem;
-    }
-
-    /* 头部 */
-    .hero{
-      text-align:center;
-      padding:3rem 1rem 2rem;
-    }
-    .hero h1{
-      font-size:2.2rem;
-      font-weight:700;
-      color:#0f172a;
-      margin-bottom:0.5rem;
-      letter-spacing:-0.5px;
-    }
-    .hero p{
-      font-size:1.1rem;
-      color:#475569;
-    }
-
-    /* 卡片样式 */
-    .card{
-      background:#ffffff;
-      border:1px solid #e2e8f0;
-      border-radius:16px;
-      padding:1.8rem;
-      margin-bottom:1.8rem;
-      box-shadow:0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
-      transition:box-shadow 0.2s ease;
-    }
-    .card:hover{
-      box-shadow:0 10px 25px -5px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04);
-    }
-    .card h2{
-      font-size:1.3rem;
-      font-weight:600;
-      color:#1e293b;
-      margin-bottom:1.2rem;
-      display:flex;
-      align-items:center;
-      gap:0.5rem;
-    }
-
-    /* 构建信息统计 */
-    .stats{
-      display:grid;
-      grid-template-columns:repeat(auto-fit, minmax(180px,1fr));
-      gap:1rem;
-      background:#f1f5f9;
-      border-radius:12px;
-      padding:1rem;
-      border:1px solid #e2e8f0;
-      margin-top:0.5rem;
-    }
-    .stat{
-      background:white;
-      padding:1rem;
-      border-radius:10px;
-      box-shadow:0 1px 3px rgba(0,0,0,0.04);
-      display:flex;
-      flex-direction:column;
-      align-items:flex-start;
-    }
-    .stat-label{
-      font-size:0.8rem;
-      color:#64748b;
-      margin-bottom:0.4rem;
-      text-transform:uppercase;
-      letter-spacing:0.3px;
-    }
-    .stat-value{
-      font-size:1.1rem;
-      font-weight:600;
-      color:#0f172a;
-      word-break:break-word;
-    }
-
-    /* 代码块 */
-    .code-block{
-      background:#0f172a;
-      padding:1.2rem 1.5rem;
-      border-radius:12px;
-      color:#a5f3fc;
-      font-family:'JetBrains Mono','Fira Code','SF Mono',monospace;
-      font-size:0.95rem;
-      overflow-x:auto;
-      margin-bottom:1rem;
-      border:1px solid #1e293b;
-      white-space:pre-wrap;
-      word-break:break-all;
-    }
-
-    /* 复制按钮 */
-    .copy-btn{
-      display:inline-flex;
-      align-items:center;
-      gap:0.4rem;
-      padding:0.75rem 1.8rem;
-      background:#2563eb;
-      color:white;
-      font-weight:600;
-      font-size:1rem;
-      border:none;
-      border-radius:12px;
-      cursor:pointer;
-      transition:background 0.2s, transform 0.1s;
-    }
-    .copy-btn:hover{
-      background:#1d4ed8;
-      transform:translateY(-1px);
-    }
-    .copy-btn.copied{
-      background:#059669;
-    }
-
-    /* 步骤列表 */
-    .steps{
-      counter-reset:step;
-      list-style:none;
-      padding-left:0;
-    }
-    .steps li{
-      counter-increment:step;
-      padding:0.8rem 0 0.8rem 3rem;
-      position:relative;
-      border-bottom:1px solid #f1f5f9;
-      color:#334155;
-    }
+    body{background:#f8fafc;color:#1e293b;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;line-height:1.6;min-height:100vh;padding-bottom:3rem}
+    .container{max-width:900px;margin:0 auto;padding:2rem 1.5rem}
+    .hero{text-align:center;padding:3rem 1rem 2rem}
+    .hero h1{font-size:2.2rem;font-weight:700;color:#0f172a;margin-bottom:0.5rem;letter-spacing:-0.5px}
+    .hero p{font-size:1.1rem;color:#475569}
+    .card{background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:1.8rem;margin-bottom:1.8rem;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);transition:box-shadow 0.2s}
+    .card:hover{box-shadow:0 10px 25px -5px rgba(0,0,0,0.08), 0 4px 6px -2px rgba(0,0,0,0.04)}
+    .card h2{font-size:1.3rem;font-weight:600;color:#1e293b;margin-bottom:1.2rem;display:flex;align-items:center;gap:0.5rem}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit, minmax(180px,1fr));gap:1rem;background:#f1f5f9;border-radius:12px;padding:1rem;border:1px solid #e2e8f0;margin-top:0.5rem}
+    .stat{background:white;padding:1rem;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04);display:flex;flex-direction:column;align-items:flex-start}
+    .stat-label{font-size:0.8rem;color:#64748b;margin-bottom:0.4rem;text-transform:uppercase;letter-spacing:0.3px}
+    .stat-value{font-size:1.1rem;font-weight:600;color:#0f172a;word-break:break-word}
+    .code-block{background:#0f172a;padding:1.2rem 1.5rem;border-radius:12px;color:#a5f3fc;font-family:'JetBrains Mono','Fira Code',monospace;font-size:0.95rem;overflow-x:auto;margin-bottom:1rem;border:1px solid #1e293b;white-space:pre-wrap;word-break:break-all}
+    .copy-btn{display:inline-flex;align-items:center;gap:0.4rem;padding:0.75rem 1.8rem;background:#2563eb;color:white;font-weight:600;font-size:1rem;border:none;border-radius:12px;cursor:pointer;transition:background 0.2s,transform 0.1s}
+    .copy-btn:hover{background:#1d4ed8;transform:translateY(-1px)}
+    .copy-btn.copied{background:#059669}
+    .steps{counter-reset:step;list-style:none;padding-left:0}
+    .steps li{counter-increment:step;padding:0.8rem 0 0.8rem 3rem;position:relative;border-bottom:1px solid #f1f5f9;color:#334155}
     .steps li:last-child{border-bottom:none}
-    .steps li::before{
-      content:counter(step);
-      position:absolute;
-      left:0;
-      top:0.7rem;
-      width:28px;
-      height:28px;
-      background:#2563eb;
-      color:white;
-      border-radius:50%;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      font-size:0.85rem;
-      font-weight:600;
-    }
-
-    /* 警告卡片 */
-    .warning{
-      border-color:#fcd34d;
-      background:#fffbeb;
-    }
-    .warning h2{
-      color:#92400e;
-    }
-    .warning ul{
-      color:#78350f;
-      padding-left:1.4rem;
-    }
-    .warning li{
-      margin-bottom:0.5rem;
-    }
-
-    /* 页脚 */
-    footer{
-      text-align:center;
-      margin-top:2.5rem;
-    }
-    .github-link{
-      display:inline-flex;
-      align-items:center;
-      gap:0.6rem;
-      background:#ffffff;
-      border:1px solid #e2e8f0;
-      padding:0.7rem 1.6rem;
-      border-radius:12px;
-      color:#1e293b;
-      font-weight:500;
-      transition:all 0.2s;
-    }
-    .github-link:hover{
-      background:#f8fafc;
-      border-color:#2563eb;
-      color:#2563eb;
-      text-decoration:none;
-    }
-    .github-link svg{
-      width:20px;
-      height:20px;
-      fill:currentColor;
-    }
-
-    /* 响应式 */
-    @media(max-width:640px){
-      .hero h1{font-size:1.6rem}
-      .stats{grid-template-columns:1fr}
-    }
+    .steps li::before{content:counter(step);position:absolute;left:0;top:0.7rem;width:28px;height:28px;background:#2563eb;color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:600}
+    .warning{border-color:#fcd34d;background:#fffbeb}
+    .warning h2{color:#92400e}
+    .warning ul{color:#78350f;padding-left:1.4rem}
+    .warning li{margin-bottom:0.5rem}
+    footer{text-align:center;margin-top:2.5rem}
+    .github-link{display:inline-flex;align-items:center;gap:0.6rem;background:#ffffff;border:1px solid #e2e8f0;padding:0.7rem 1.6rem;border-radius:12px;color:#1e293b;font-weight:500;transition:all 0.2s}
+    .github-link:hover{background:#f8fafc;border-color:#2563eb;color:#2563eb;text-decoration:none}
+    .github-link svg{width:20px;height:20px;fill:currentColor}
+    @media(max-width:640px){.hero h1{font-size:1.6rem}.stats{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -422,7 +255,7 @@ function generateHtml(content) {
 </html>`;
 }
 
-// ==================== 请求处理（保持不变）====================
+// ==================== 请求处理 ====================
 addEventListener("fetch", event => {
   event.respondWith(handleRequest(event));
 });
@@ -435,6 +268,7 @@ async function handleRequest(event) {
   const url = new URL(request.url);
   const path = url.pathname;
 
+  // 首页
   if (path === "/") {
     const content = await generateContent();
     return new Response(generateHtml(content), {
@@ -442,6 +276,7 @@ async function handleRequest(event) {
     });
   }
 
+  // 代理下载 .deb 或 .sh
   if (path.endsWith(".deb") || path === "/Update-kernel.sh") {
     return proxyDownload(request, path);
   }
@@ -449,11 +284,13 @@ async function handleRequest(event) {
   return new Response("Not Found", { status: 404 });
 }
 
+// ==================== 核心代理 + 缓存 ====================
 async function proxyDownload(request, path) {
   let targetUrl;
   const isScript = path === "/Update-kernel.sh";
+  const isDeb = path.endsWith(".deb");
 
-  if (path.endsWith(".deb")) {
+  if (isDeb) {
     targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/kernel-${CONFIG.releaseTag}${path}`;
   } else if (isScript) {
     targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/HEAD/Update-kernel.sh`;
@@ -461,24 +298,72 @@ async function proxyDownload(request, path) {
     return new Response("Invalid file type", { status: 400 });
   }
 
+  // 1. 检查 Cloudflare 缓存（仅对 .deb 启用长时间缓存）
+  if (isDeb) {
+    const cacheKey = new Request(targetUrl, { method: "GET" });
+    const cached = await caches.default.match(cacheKey);
+    if (cached) {
+      // 检查自定义缓存时间
+      const age = parseInt(cached.headers.get("X-Cache-Age") || "0");
+      if (Date.now() - age < CONFIG.assetCacheTTL * 1000) {
+        const respHeaders = new Headers(cached.headers);
+        respHeaders.set("X-Cache", "HIT");
+        return new Response(cached.body, {
+          status: cached.status,
+          statusText: cached.statusText,
+          headers: respHeaders,
+        });
+      }
+    }
+  }
+
+  // 2. 转发客户端头部并添加必要认证
   const clientHeaders = new Headers(request.headers);
   const proxyHeaders = new Headers();
+  let hasUA = false;
   for (const [key, value] of clientHeaders) {
     const lowerKey = key.toLowerCase();
     if (lowerKey === "host" || lowerKey.startsWith("cf-")) continue;
+    if (lowerKey === "user-agent") hasUA = true;
     proxyHeaders.set(key, value);
+  }
+  // 保底 User-Agent
+  if (!hasUA) {
+    proxyHeaders.set("User-Agent", "Mozilla/5.0 (compatible; Cloudflare-Worker)");
+  }
+  // GitHub 认证提升频率限制
+  if (CONFIG.githubToken) {
+    proxyHeaders.set("Authorization", `token ${CONFIG.githubToken}`);
   }
 
   try {
-    const githubResponse = await fetch(targetUrl, { headers: proxyHeaders, redirect: "follow" });
+    const githubResponse = await fetch(targetUrl, {
+      headers: proxyHeaders,
+      redirect: "follow",
+    });
+
+    // 构建响应头
     const resHeaders = new Headers(githubResponse.headers);
     resHeaders.set("Access-Control-Allow-Origin", "*");
     resHeaders.set("Accept-Ranges", "bytes");
-
-    if (path.endsWith(".deb")) {
+    if (isDeb) {
       resHeaders.set("Content-Disposition", "attachment");
+      // 标记缓存时间戳
+      resHeaders.set("X-Cache-Age", Date.now().toString());
+      resHeaders.set("Cache-Control", `public, max-age=${CONFIG.assetCacheTTL}`);
+      // 将成功响应放入缓存
+      if (githubResponse.status === 200 || githubResponse.status === 206) {
+        const cacheKey = new Request(targetUrl, { method: "GET" });
+        const cacheRes = new Response(githubResponse.body, {
+          status: githubResponse.status,
+          statusText: githubResponse.statusText,
+          headers: resHeaders,
+        });
+        ctx.waitUntil(caches.default.put(cacheKey, cacheRes.clone()));
+      }
     } else {
-      resHeaders.delete("Content-Disposition");
+      // 脚本不强制缓存，但也可以缓存短时间（例如5分钟）
+      resHeaders.set("Cache-Control", "public, max-age=300");
     }
 
     return new Response(githubResponse.body, {
