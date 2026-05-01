@@ -4,18 +4,19 @@ const CONFIG = {
   releaseTag: "v7.0",
   pageTitle: "小米 Raphael (K20 Pro) 定制内核镜像",
   githubRepoUrl: "https://github.com/ccmx200/kernel-deb",
-  // 缓存时间（秒）
-  releaseCacheTTL: 86400,
-  githubToken: "", // 建议在环境变量中设置 GITHUB_TOKEN
+  releaseCacheTTL: 86400, // 缓存时间（秒）
+  githubToken: "", // 如需访问私有仓库，请在 Cloudflare 环境变量中设置 GITHUB_TOKEN
 };
 
-// 从环境变量读取令牌
+// 从环境变量读取令牌（可选）
 if (typeof GITHUB_TOKEN !== "undefined") {
   CONFIG.githubToken = GITHUB_TOKEN;
 }
 
 // 工具函数
-function getCacheKey(url) { return new URL(url).pathname; }
+function getCacheKey(url) {
+  return new URL(url).pathname;
+}
 
 async function getCachedResponse(request) {
   const cache = caches.default;
@@ -31,27 +32,47 @@ async function setCachedResponse(request, response) {
   const cache = caches.default;
   const headers = new Headers(response.headers);
   headers.set("X-Cache-Age", Date.now().toString());
-  const res = new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  const res = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
   ctx.waitUntil(cache.put(request, res));
 }
 
 // 获取 Release 信息（带缓存）
 async function fetchReleaseInfo() {
   const apiUrl = `https://api.github.com/repos/${CONFIG.githubRepo}/releases/tags/kernel-${CONFIG.releaseTag}`;
-  const cacheRequest = new Request(apiUrl, { headers: { "Accept": "application/vnd.github.v3+json" } });
+  const cacheRequest = new Request(apiUrl, {
+    headers: { "Accept": "application/vnd.github.v3+json" },
+  });
 
   const cached = await getCachedResponse(cacheRequest);
   if (cached) {
-    try { return parseReleaseData(await cached.json()); } catch (e) {}
+    try {
+      return parseReleaseData(await cached.json());
+    } catch (e) {
+      // 缓存数据损坏，继续请求
+    }
   }
 
   try {
-    const headers = { "Accept": "application/vnd.github.v3+json", "User-Agent": "Cloudflare-Worker" };
-    if (CONFIG.githubToken) headers["Authorization"] = `token ${CONFIG.githubToken}`;
+    const headers = {
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "Cloudflare-Worker",
+    };
+    if (CONFIG.githubToken) {
+      headers["Authorization"] = `token ${CONFIG.githubToken}`;
+    }
     const response = await fetch(apiUrl, { headers });
     if (!response.ok) return null;
     const data = await response.json();
-    await setCachedResponse(cacheRequest, new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } }));
+    await setCachedResponse(
+      cacheRequest,
+      new Response(JSON.stringify(data), {
+        headers: { "Content-Type": "application/json" },
+      })
+    );
     return parseReleaseData(data);
   } catch (e) {
     console.error("Release fetch failed:", e);
@@ -74,7 +95,13 @@ function parseReleaseData(data) {
 
 function formatDate(dateStr) {
   if (!dateStr) return "未知";
-  return new Date(dateStr).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return new Date(dateStr).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function getRelativeTime(dateStr) {
@@ -252,33 +279,61 @@ async function handleRequest(event) {
 
 async function proxyDownload(request, path) {
   let targetUrl;
+  const isScript = path === "/Update-kernel.sh";
+
+  // 根据文件类型构造正确的 GitHub 链接
   if (path.endsWith(".deb")) {
     targetUrl = `https://github.com/${CONFIG.githubRepo}/releases/download/kernel-${CONFIG.releaseTag}${path}`;
+  } else if (isScript) {
+    // 使用 HEAD 自动跟随默认分支（无需硬编码主线名）
+    targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/HEAD/Update-kernel.sh`;
   } else {
-    targetUrl = `https://raw.githubusercontent.com/${CONFIG.githubRepo}/refs/heads/main/Update-kernel.sh`;
+    return new Response("Invalid file type", { status: 400 });
   }
 
-  const headers = new Headers();
-  headers.set("User-Agent", "Cloudflare-Worker");
-  if (CONFIG.githubToken) headers.set("Authorization", `token ${CONFIG.githubToken}`);
+  // 1️⃣ 直接复用客户端请求的全部头部，不做任何手动添加
   const clientHeaders = new Headers(request.headers);
-  const rangeHeader = clientHeaders.get("Range");
-  if (rangeHeader) headers.set("Range", rangeHeader);
+  const proxyHeaders = new Headers();
 
-  const githubResponse = await fetch(targetUrl, { method: "GET", headers, redirect: "follow" });
+  // 遍历并复制客户端头部，过滤掉可能引起问题的 Hop-by-hop 头部
+  for (const [key, value] of clientHeaders) {
+    const lowerKey = key.toLowerCase();
+    // 排除 Host 和 Cloudflare 内部头，避免干扰
+    if (lowerKey === "host" || lowerKey.startsWith("cf-")) continue;
+    proxyHeaders.set(key, value);
+  }
 
-  const resHeaders = new Headers();
-  resHeaders.set("Access-Control-Allow-Origin", "*");
-  resHeaders.set("Accept-Ranges", "bytes");
+  try {
+    // 2️⃣ 向 GitHub 发起请求，使用完全转发的头部
+    const githubResponse = await fetch(targetUrl, {
+      headers: proxyHeaders,
+      redirect: "follow",
+    });
 
-  if (githubResponse.status === 200 || githubResponse.status === 206) {
-    const contentType = githubResponse.headers.get("Content-Type") || "application/octet-stream";
-    resHeaders.set("Content-Type", contentType);
-    const contentLength = githubResponse.headers.get("Content-Length");
-    if (contentLength) resHeaders.set("Content-Length", contentLength);
-    resHeaders.set("Content-Disposition", "attachment");
-    return new Response(githubResponse.body, { status: githubResponse.status, headers: resHeaders });
-  } else {
-    return new Response(githubResponse.body, { status: githubResponse.status, headers: { "Access-Control-Allow-Origin": "*" } });
+    // 3️⃣ 构建响应头（保留上游的 Content-Type 等，并添加 CORS）
+    const resHeaders = new Headers(githubResponse.headers);
+    resHeaders.set("Access-Control-Allow-Origin", "*");
+    resHeaders.set("Accept-Ranges", "bytes");
+
+    // 仅对 .deb 文件保留强制下载头（确保下载行为），脚本不设置，允许直接文本展示
+    if (path.endsWith(".deb")) {
+      resHeaders.set("Content-Disposition", "attachment");
+    } else {
+      // 移除可能由 GitHub 返回的 Content-Disposition，确保脚本不作为附件下载
+      resHeaders.delete("Content-Disposition");
+    }
+
+    return new Response(githubResponse.body, {
+      status: githubResponse.status,
+      statusText: githubResponse.statusText,
+      headers: resHeaders,
+    });
+  } catch (err) {
+    return new Response(`Proxy error: ${err.message}`, {
+      status: 502,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }
 }
