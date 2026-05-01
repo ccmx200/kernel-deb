@@ -27,7 +27,7 @@ async function handleRequest(request, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 1. 首页：利用 Cloudflare 原生缓存，无需手动时间戳校验
+  // 1. 首页：利用 Cloudflare 原生缓存
   if (path === "/" || path === "") {
     const cacheKey = new Request(url.toString(), { method: "GET" });
     const cache = caches.default;
@@ -37,10 +37,16 @@ async function handleRequest(request, ctx) {
 
     const content = await generateContent(ctx);
     const html = generateHtml(content);
+    
+    // 增加安全响应头，提升服务质量评级
     const response = new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": `public, max-age=${CONFIG.pageCacheTTL}`,
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-XSS-Protection": "1; mode=block",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
       },
     });
 
@@ -103,7 +109,7 @@ function parseReleaseData(data) {
   };
 }
 
-// ==================== 代理下载（修复 Range 缓存污染，支持 HEAD）====================
+// ==================== 代理下载 ====================
 async function proxyDownload(request, path, ctx) {
   const isDeb = path.endsWith(".deb");
   const method = request.method.toUpperCase();
@@ -116,7 +122,6 @@ async function proxyDownload(request, path, ctx) {
   const ttl = isDeb ? CONFIG.assetCacheTTL : CONFIG.scriptCacheTTL;
   const cache = caches.default;
 
-  // 1. 尝试从缓存中读取完整文件（Cloudflare 会自动处理 Range）
   let cached = await cache.match(cacheKey);
   if (cached) {
     const respHeaders = new Headers(cached.headers);
@@ -129,12 +134,7 @@ async function proxyDownload(request, path, ctx) {
     return new Response(cached.body, { status: cached.status, headers: respHeaders });
   }
 
-  // 2. 回源获取完整文件（不允许局部 Range 缓存污染）
-  const proxyHeaders = new Headers({
-    "User-Agent": "Cloudflare-Worker",
-  });
-  // 客户端发送 Range 头时，我们依然请求完整文件（由 Cloudflare CDN 处理部分响应）
-  // 这样做可以保证存入缓存的是完整副本，避免后续用户下载到残缺文件。
+  const proxyHeaders = new Headers({ "User-Agent": "Cloudflare-Worker" });
 
   try {
     const resp = await fetch(targetUrl, {
@@ -143,55 +143,38 @@ async function proxyDownload(request, path, ctx) {
       redirect: "follow",
     });
 
-    // 非 200 响应（例如 403/404）不缓存，直接返回
     if (resp.status !== 200) {
-      return new Response(resp.body, {
-        status: resp.status,
-        headers: { "Access-Control-Allow-Origin": "*" },
-      });
+      return new Response(resp.body, { status: resp.status, headers: { "Access-Control-Allow-Origin": "*" } });
     }
 
-    // 准备返回给客户端的头部
     const clientHeaders = new Headers(resp.headers);
     clientHeaders.set("Access-Control-Allow-Origin", "*");
     clientHeaders.set("Accept-Ranges", "bytes");
     clientHeaders.set("X-Cache", "MISS");
     if (isDeb) clientHeaders.set("Content-Disposition", "attachment");
 
-    // 克隆用于缓存（仅完整的 200 OK 存入）
     const clonedResp = resp.clone();
     const cacheHeaders = new Headers(clonedResp.headers);
     cacheHeaders.set("Cache-Control", `public, max-age=${ttl}`);
     if (isDeb) cacheHeaders.set("Content-Disposition", "attachment");
 
-    const cacheObj = new Response(clonedResp.body, {
-      status: 200,
-      headers: cacheHeaders,
-    });
+    const cacheObj = new Response(clonedResp.body, { status: 200, headers: cacheHeaders });
     ctx.waitUntil(cache.put(cacheKey, cacheObj));
 
-    // 如果是 HEAD 请求，只返回头
     if (method === "HEAD") {
       return new Response(null, { status: 200, headers: clientHeaders });
     }
 
     return new Response(resp.body, { status: 200, headers: clientHeaders });
   } catch (err) {
-    return new Response(`Proxy error: ${err.message}`, {
-      status: 502,
-      headers: { "Access-Control-Allow-Origin": "*" },
-    });
+    return new Response(`Proxy error: ${err.message}`, { status: 502, headers: { "Access-Control-Allow-Origin": "*" } });
   }
 }
 
 // ==================== 定时预缓存任务 ====================
 async function warmUpCache(ctx) {
-  console.log("⏰ 预缓存任务开始...");
   const info = await fetchReleaseInfo(ctx);
-  if (!info?.assets?.length) {
-    console.log("❌ 未获取到 Release 资产，跳过");
-    return;
-  }
+  if (!info?.assets?.length) return;
 
   const assetsToCache = info.assets.filter(a => a.name.endsWith(".deb"));
   const cache = caches.default;
@@ -200,51 +183,27 @@ async function warmUpCache(ctx) {
     const downloadUrl = asset.browser_download_url;
     const cacheKey = new Request(downloadUrl, { method: "GET" });
 
-    if (await cache.match(cacheKey)) {
-      console.log(`✅ ${asset.name} 已缓存，跳过`);
-      continue;
-    }
+    if (await cache.match(cacheKey)) continue;
 
-    let success = false;
     for (let retry = 0; retry < CONFIG.cronMaxRetries; retry++) {
       try {
-        const resp = await fetch(downloadUrl, {
-          headers: { "User-Agent": "Cloudflare-Worker-Cron" },
-          redirect: "follow",
-        });
+        const resp = await fetch(downloadUrl, { headers: { "User-Agent": "Cloudflare-Worker-Cron" }, redirect: "follow" });
         if (!resp.ok) continue;
 
         const cacheHeaders = new Headers(resp.headers);
         cacheHeaders.set("Cache-Control", `public, max-age=${CONFIG.assetCacheTTL}`);
         cacheHeaders.set("Content-Disposition", "attachment");
 
-        await cache.put(
-          cacheKey,
-          new Response(resp.body, { status: 200, headers: cacheHeaders })
-        );
-        console.log(`✅ ${asset.name} 缓存成功`);
-        success = true;
+        await cache.put(cacheKey, new Response(resp.body, { status: 200, headers: cacheHeaders }));
         break;
-      } catch (e) {
-        console.log(`❌ ${asset.name} 请求失败: ${e.message}`);
-      }
+      } catch (e) {}
     }
-    if (!success) console.log(`💥 ${asset.name} 最终缓存失败`);
   }
-  console.log("🏁 预缓存任务结束");
 }
 
-// ==================== 页面生成逻辑（保持极简风格）====================
+// ==================== 页面生成逻辑 ====================
 function formatDate(d) {
-  return d
-    ? new Date(d).toLocaleString("zh-CN", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "未知";
+  return d ? new Date(d).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "未知";
 }
 
 function getRelativeTime(d) {
@@ -260,50 +219,62 @@ function getRelativeTime(d) {
 async function generateContent(ctx) {
   const info = await fetchReleaseInfo(ctx);
 
-  const buildHtml = info
-    ? `
+  const buildHtml = info ? `
     <div class="stats">
-      <div class="stat"><span class="stat-label">内核版本</span><span class="stat-value">${info.version}</span></div>
-      <div class="stat"><span class="stat-label">构建时间</span><span class="stat-value">${info.buildTime || formatDate(info.publishedAt)}</span></div>
-      <div class="stat"><span class="stat-label">发布时间</span><span class="stat-value">${getRelativeTime(info.publishedAt)}</span></div>
-      <div class="stat"><span class="stat-label">构建 ID</span><span class="stat-value">${info.buildId || "-"}</span></div>
-    </div>`
-    : `
-    <div class="stats" style="background:#fff3cd;border-color:#ffc107;">
-      <div class="stat" style="grid-column:1/-1;text-align:center;color:#856404;">⚠️ 暂时无法获取最新构建数据，请刷新重试</div>
+      <div class="stat"><div class="stat-label">内核版本</div><div class="stat-value text-gradient">${info.version}</div></div>
+      <div class="stat"><div class="stat-label">构建时间</div><div class="stat-value">${info.buildTime || formatDate(info.publishedAt)}</div></div>
+      <div class="stat"><div class="stat-label">发布时间</div><div class="stat-value">${getRelativeTime(info.publishedAt)}</div></div>
+      <div class="stat"><div class="stat-label">构建 ID</div><div class="stat-value id-text">${info.buildId || "-"}</div></div>
+    </div>` : `
+    <div class="stats error-state">
+      <div class="stat-error">⚠️ 暂时无法获取最新构建数据，请稍后刷新重试</div>
     </div>`;
 
   return `
-    <section class="hero">
-      <h1>🐧 小米 Raphael (K20 Pro) 内核 ${CONFIG.releaseTag}</h1>
-      <p>自动化构建 · 高速分发 · 一键升级</p>
-    </section>
+    <header class="hero">
+      <div class="icon-wrapper">🐧</div>
+      <h1>小米 Raphael 内核 <span>${CONFIG.releaseTag}</span></h1>
+      <p>极简 · 稳定 · 高速 · 一键升级</p>
+    </header>
 
-    <section class="card">
-      <h2>📊 最新构建信息</h2>
-      ${buildHtml}
-    </section>
+    <main>
+      <section class="card glass">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg> 最新构建信息</h2>
+        ${buildHtml}
+      </section>
 
-    <section class="card">
-      <h2>🚀 一键升级</h2>
-      <div class="code-block" id="cmd">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
-      <button class="copy-btn" onclick="copyCmd()">📋 复制命令</button>
-    </section>
+      <section class="card glass">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg> 极速一键升级</h2>
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+          </div>
+          <div class="terminal-body" id="cmd">sudo bash -c "$(curl -fsSL https://up-kernel.cuicanmx.cn/Update-kernel.sh)"</div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="copyCmd()" id="copyBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+            <span>一键复制命令</span>
+          </button>
+        </div>
+      </section>
 
-    <section class="card">
-      <h2>📦 关于本项目</h2>
-      <p>依托 Cloudflare Worker 为 <strong>红米 K20 Pro（raphael）</strong> 提供稳定的内核更新服务。所有内核包由 GitHub Actions 自动构建。</p>
-      <p class="sub-text">支持断点续传，全国加速访问。</p>
-    </section>
+      <div class="grid-2">
+        <section class="card glass slim">
+          <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg> 关于本项目</h2>
+          <p class="desc">依托 Cloudflare CDN 边缘节点，为 <strong>红米 K20 Pro（raphael）</strong> 提供稳定的内核更新服务。代码全开源，GitHub Actions 自动化构建，支持断点续传加速。</p>
+        </section>
 
-    <section class="card warning">
-      <h2>⚠️ 刷机须知</h2>
-      <ul>
-        <li>仅适配 <strong>小米 Raphael (K20 Pro)</strong></li>
-        <li>刷机前请备份数据，保持电量充足</li>
-        <li>更新后执行 <code>reboot</code> 重启</li>
-      </ul>
-    </section>`;
+        <section class="card glass slim warning">
+          <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg> 刷机须知</h2>
+          <ul>
+            <li>仅适配机型：<strong>小米 Raphael (K20 Pro)</strong></li>
+            <li>请保持电量充足，操作前务必备份核心数据</li>
+            <li>更新完成后，请执行 <code>reboot</code> 重启设备</li>
+          </ul>
+        </section>
+      </div>
+    </main>`;
 }
 
 function generateHtml(content) {
@@ -311,36 +282,91 @@ function generateHtml(content) {
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>${CONFIG.pageTitle}</title>
+  <meta name="description" content="自动化构建、高速分发的红米 K20 Pro 极简内核一键升级服务。">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐧</text></svg>">
   <style>
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    body{background:#f8fafc;color:#0f172a;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5}
-    .container{max-width:800px;margin:0 auto;padding:2rem 1.25rem}
-    .hero{text-align:center;padding:2rem 0 1.5rem}
-    .hero h1{font-size:2rem;font-weight:700}
-    .hero p{color:#475569;margin-top:0.3rem;font-size:1.05rem}
-    .card{background:#fff;border-radius:12px;padding:1.6rem;margin-bottom:1.6rem;border:1px solid #e2e8f0}
-    .card h2{font-size:1.25rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:0.4rem}
-    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.8rem;background:#f1f5f9;border-radius:10px;padding:0.8rem}
-    .stat{background:#fff;padding:0.8rem;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
-    .stat-label{font-size:0.75rem;color:#64748b;text-transform:uppercase;letter-spacing:0.1em}
-    .stat-value{font-size:1.1rem;font-weight:600;color:#0f172a;word-break:break-word}
-    .code-block{background:#0f172a;padding:1.2rem;border-radius:10px;color:#a5f3fc;font-family:'JetBrains Mono',monospace;font-size:0.9rem;overflow-x:auto;margin-bottom:0.8rem;white-space:pre-wrap;word-break:break-all}
-    .copy-btn{display:inline-block;padding:0.7rem 1.5rem;background:#2563eb;color:#fff;font-weight:600;font-size:0.95rem;border:none;border-radius:10px;cursor:pointer;transition:background 0.2s}
-    .copy-btn:hover{background:#1d4ed8}
-    .copy-btn.copied{background:#059669}
-    .warning{background:#fffbeb;border-color:#fcd34d}
-    .warning h2{color:#92400e}
-    .warning ul{padding-left:1.3rem;color:#78350f}
-    .warning li{margin-bottom:0.4rem}
-    footer{text-align:center;margin-top:2rem}
-    .github-link{display:inline-flex;align-items:center;gap:0.5rem;background:#fff;border:1px solid #e2e8f0;padding:0.6rem 1.2rem;border-radius:10px;color:#1e293b;font-weight:500;text-decoration:none;transition:all 0.2s}
-    .github-link:hover{background:#f8fafc;border-color:#2563eb;color:#2563eb}
-    .github-link svg{width:18px;height:18px;fill:currentColor}
-    .sub-text{font-size:0.85rem;color:#6b7280;margin-top:0.5rem}
-    @media(max-width:640px){.hero h1{font-size:1.5rem}.stats{grid-template-columns:1fr}}
+    :root {
+      --primary: #4f46e5; --primary-hover: #4338ca;
+      --bg-color: #f8fafc; --text-main: #0f172a; --text-muted: #64748b;
+      --card-bg: rgba(255, 255, 255, 0.85); --card-border: rgba(226, 232, 240, 0.8);
+      --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: "JetBrains Mono", "Fira Code", Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg-color); color: var(--text-main); font-family: var(--font-ui); line-height: 1.6; -webkit-font-smoothing: antialiased; 
+           background-image: radial-gradient(at 0% 0%, hsla(253,16%,7%,0.03) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(225,39%,30%,0.03) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(339,49%,30%,0.03) 0, transparent 50%);
+           background-attachment: fixed; }
+    .container { max-width: 860px; margin: 0 auto; padding: 2.5rem 1.25rem; }
+    
+    /* Hero Section */
+    .hero { text-align: center; margin-bottom: 2.5rem; animation: fadeUp 0.6s ease-out; }
+    .hero .icon-wrapper { font-size: 3.5rem; line-height: 1; margin-bottom: 0.5rem; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1)); }
+    .hero h1 { font-size: 2.25rem; font-weight: 800; letter-spacing: -0.025em; color: #1e293b; margin-bottom: 0.4rem; }
+    .hero h1 span { background: linear-gradient(135deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { color: var(--text-muted); font-size: 1.1rem; font-weight: 500; }
+
+    /* Cards */
+    .card { background: var(--card-bg); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--card-border); border-radius: 16px; padding: 1.75rem; margin-bottom: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02), 0 2px 4px -2px rgba(0,0,0,0.02); transition: transform 0.2s, box-shadow 0.2s; animation: fadeUp 0.6s ease-out backwards; }
+    .card:nth-child(2) { animation-delay: 0.1s; }
+    .card:nth-child(3) { animation-delay: 0.2s; }
+    .card:hover { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
+    .card h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem; color: #1e293b; }
+    .card h2 svg { width: 22px; height: 22px; color: var(--primary); }
+    .slim { padding: 1.5rem; }
+
+    /* Stats Grid */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+    .stat { background: #fff; padding: 1rem 1.25rem; border-radius: 12px; border: 1px solid #f1f5f9; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 0.25rem; }
+    .stat-value { font-size: 1.15rem; font-weight: 700; color: var(--text-main); word-break: break-word; }
+    .text-gradient { background: linear-gradient(to right, #2563eb, #4f46e5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .id-text { font-family: var(--font-mono); font-size: 0.95rem; background: #f1f5f9; padding: 0.1rem 0.4rem; border-radius: 4px; display: inline-block; }
+    .error-state { background: #fef2f2; border: 1px solid #fecaca; }
+    .stat-error { text-align: center; color: #991b1b; padding: 1rem; width: 100%; font-weight: 500; }
+
+    /* Terminal Mac Style */
+    .terminal { background: #0f172a; border-radius: 12px; overflow: hidden; margin-bottom: 1.25rem; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1), 0 10px 15px -3px rgba(0,0,0,0.1); }
+    .terminal-header { background: #1e293b; padding: 10px 16px; display: flex; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot.red { background: #ff5f56; } .dot.yellow { background: #ffbd2e; } .dot.green { background: #27c93f; }
+    .terminal-body { padding: 1.25rem 1.5rem; color: #38bdf8; font-family: var(--font-mono); font-size: 0.95rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+
+    /* Button */
+    .btn-group { display: flex; justify-content: flex-start; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); user-select: none; }
+    .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2); }
+    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: 0 6px 8px -1px rgba(79, 70, 229, 0.3); }
+    .btn-primary:active { transform: scale(0.97); }
+    .btn svg { width: 18px; height: 18px; }
+    .btn.copied { background: #059669; box-shadow: 0 4px 6px -1px rgba(5, 150, 105, 0.2); }
+
+    /* Layout & Utilities */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; animation: fadeUp 0.6s ease-out 0.3s backwards; }
+    .desc { color: #475569; font-size: 0.95rem; }
+    
+    .warning { background: linear-gradient(to right bottom, #fffbeb, #fef3c7); border-color: #fde68a; }
+    .warning h2 { color: #b45309; }
+    .warning h2 svg { color: #d97706; }
+    .warning ul { padding-left: 1.5rem; color: #92400e; font-size: 0.95rem; }
+    .warning li { margin-bottom: 0.5rem; }
+    .warning code { background: rgba(217, 119, 6, 0.15); padding: 0.1rem 0.3rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.85em; }
+
+    /* Footer */
+    footer { text-align: center; margin-top: 3rem; animation: fadeUp 0.6s ease-out 0.4s backwards; }
+    .github-link { display: inline-flex; align-items: center; gap: 0.5rem; background: #fff; border: 1px solid var(--card-border); padding: 0.6rem 1.25rem; border-radius: 12px; color: #334155; font-weight: 600; text-decoration: none; font-size: 0.9rem; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
+    .github-link:hover { background: #f8fafc; border-color: var(--primary); color: var(--primary); transform: translateY(-1px); }
+    .github-link svg { width: 18px; height: 18px; fill: currentColor; }
+
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media(max-width: 768px) {
+      .grid-2 { grid-template-columns: 1fr; gap: 1rem; }
+      .container { padding: 1.5rem 1rem; }
+      .hero h1 { font-size: 1.8rem; }
+      .card { padding: 1.25rem; }
+    }
   </style>
 </head>
 <body>
@@ -349,18 +375,22 @@ function generateHtml(content) {
     <footer>
       <a href="${CONFIG.githubRepoUrl}" target="_blank" rel="noopener noreferrer" class="github-link">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        ccmx200/kernel-deb
+        GitHub 代码仓库
       </a>
     </footer>
   </div>
   <script>
     function copyCmd(){
-      const cmd=document.getElementById('cmd').innerText;
-      navigator.clipboard.writeText(cmd).then(()=>{
-        const btn=document.querySelector('.copy-btn');
-        btn.textContent='✅ 已复制';
+      const cmd = document.getElementById('cmd').innerText;
+      navigator.clipboard.writeText(cmd).then(() => {
+        const btn = document.getElementById('copyBtn');
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg><span>复制成功</span>';
         btn.classList.add('copied');
-        setTimeout(()=>{btn.textContent='📋 复制命令';btn.classList.remove('copied');},2000);
+        setTimeout(() => { 
+          btn.innerHTML = originalHtml; 
+          btn.classList.remove('copied'); 
+        }, 2000);
       });
     }
   </script>
